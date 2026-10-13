@@ -1,0 +1,40 @@
+# =====================================================================
+#  render.yaml  —  RENDER BLUEPRINT (OPTIONAL)
+# =====================================================================
+#  This file only works with Render's "New + -> Blueprint" deploy.
+#  With a normal "Web Service" deploy Render ignores it — then set the
+#  Build/Start commands yourself (see README):
+#     Build Command: pip install -r requirements.txt
+#     Start Command: python bot.py
+#
+#  Render schema: https://render.com/schema/render.yaml.json
+# =====================================================================
+services:
+  - type: web
+    name: linnet-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.13"
+      # sync: false  ->  value is entered in the Render Dashboard (secret)
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: BOT_BRAND
+        value: "Linnet"
+      - key: AI_API_KEY
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      # Optional (defaults already set in config.py):
+      # - key: AI_MODEL
+      #   value: gemini-3.5-flash
+      # - key: AI_MODEL_LITE
+      #   value: gemini-3.5-flash-lite
+      - key: JOIN_FAIL_MODE
+        value: "closed"
