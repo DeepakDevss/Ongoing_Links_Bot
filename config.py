@@ -92,7 +92,7 @@ Tʜᴀɴᴋ ʏᴏᴜ ꜰᴏʀ ᴊᴏɪɴɪɴɢ ᴜs ❤️""",
 # ---------------------------------------------------------------------
 # #7  WELCOME PHOTO  (assets/welcome.png — apni image se replace kar sakte ho)
 # ---------------------------------------------------------------------
-  WELCOME_IMAGE = os.getenv("WELCOME_IMAGE", "welcome.png")
+ WELCOME_IMAGE = os.getenv("WELCOME_IMAGE", "welcome.png")
 
 
 # ---------------------------------------------------------------------
