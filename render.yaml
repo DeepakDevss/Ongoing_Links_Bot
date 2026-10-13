@@ -1,0 +1,39 @@
+# =====================================================================
+#  render.yaml  —  RENDER BLUEPRINT (OPTIONAL)
+# =====================================================================
+#  Ye file sirf tab kaam karti hai jab aap Render par
+#     "New +  ->  Blueprint"  se deploy karo.
+#  Agar aap normal "Web Service" se deploy karte ho, to Render is file
+#  ko IGNORE kar deta hai — tab Build/Start command khud type karne padte hain
+#  (README mein diye hain):
+#     Build Command: pip install -r requirements.txt
+#     Start Command: python bot.py
+#
+#  Render ka official schema: https://render.com/schema/render.yaml.json
+#  (ye file us schema ke hisaab se valid hai)
+# =====================================================================
+services:
+  - type: web
+    name: telegram-gemini-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.13"
+      # sync: false  ->  value Render Dashboard mein daalni hai (secret)
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      # Optional (default config.py mein already set hai):
+      # - key: GEMINI_MODEL
+      #   value: gemini-3.6-flash
+      # - key: GEMINI_MODEL_LITE
+      #   value: gemini-3.5-flash-lite
