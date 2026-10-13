@@ -65,8 +65,8 @@ REQUIRED_CHATS = [
 # ---------------------------------------------------------------------
 # #5  WELCOME MESSAGE KA BUTTON  (aapka 2nd group/channel link)
 # ---------------------------------------------------------------------
-WELCOME_BUTTON_TEXT = os.getenv("WELCOME_BUTTON_TEXT", "🚀 Join Our Main Group")
-WELCOME_BUTTON_URL = os.getenv("WELCOME_BUTTON_URL", "https://t.me/YourMainGroup")
+WELCOME_BUTTON_TEXT = os.getenv("WELCOME_BUTTON_TEXT", "Join Our Main Group")
+WELCOME_BUTTON_URL = os.getenv("WELCOME_BUTTON_URL", "https://t.me/LinnetAICommunity")
 
 
 # ---------------------------------------------------------------------
