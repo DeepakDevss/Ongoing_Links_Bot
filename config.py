@@ -56,9 +56,9 @@ ADMIN_IDS = [
 #               (public channel: "@channelusername"; private: -1001234567890)
 # ---------------------------------------------------------------------
 REQUIRED_CHATS = [
-    {"title": "📢 Join Our Channel", "url": "https://t.me/YourChannel", "id": "@YourChannel"},
-    {"title": "💬 Join Our Group",   "url": "https://t.me/YourGroup",   "id": -1001234567890},
-    {"title": "🎁 Bonus Group",      "url": "https://t.me/YourBonus",   "id": -1001234567890},
+    {"title": "Join Our Anime Channel", "url": "https://t.me/YourChannel", "id": "@YourChannel"},
+    {"title": "Join Our Anime Group",   "url": "https://t.me/YourChannel",   "id": -1001234567890},
+    {"title": "AI Al Community Group",      "url": "https://t.me/LinnetAICommunity",   "id": -1001234567890},
 ]
 
 
