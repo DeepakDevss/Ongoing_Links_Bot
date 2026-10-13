@@ -1,0 +1,27 @@
+# =====================================================================
+#  .gitignore  —  ye files GitHub par NAHI jayengi
+#  (Secrets aur runtime data safe rehte hain)
+# =====================================================================
+
+# ---- Secrets — NEVER commit ----
+.env
+.env.*
+!.env.example
+
+# ---- Bot runtime data (Render par khud ban jaati hai) ----
+data/
+*.json.tmp
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
