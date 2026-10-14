@@ -56,6 +56,7 @@ runtime data.
 | `AI_API_KEY` | Your AI provider API key | `#2` |
 | `AI_MODEL` / `AI_MODEL_LITE` | Model IDs (defaults are set) | `#2b` |
 | `ADMIN_IDS` | Your Telegram user ID (send `/id` to the bot) | `#3` |
+| `OWNER_ID` / `OWNER_NAME` | Bot owner — skips the force-join gate entirely | `#3b` |
 | `LINK_BLOCKS` | Buttons + which chats are force-join (same `row` = side by side) | `#4` |
 | `JOIN_FAIL_MODE` | `closed` (recommended) or `open` | `#5` |
 | `WELCOME_TEMPLATE` / `WELCOME_IMAGE` | Welcome text (blank = built-in styled text) and image | `#6` |

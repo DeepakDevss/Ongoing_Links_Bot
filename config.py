@@ -61,6 +61,11 @@ ADMIN_IDS = [
     if x.strip().lstrip("-").isdigit()
 ]
 
+# #3b  OWNER  (bot ka malik). Khaali chhodo to ADMIN_IDS ka pehla id owner maana jayega.
+#      Owner ko force-join gate NAHI dikhta — bina kisi permission ke chalta hai.
+OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0) or (ADMIN_IDS[0] if ADMIN_IDS else 0)
+OWNER_NAME = os.getenv("OWNER_NAME", "")
+
 
 # ---------------------------------------------------------------------
 # #4  LINK BLOCKS  (yahi buttons user ko dikhte hain — isi order mein)
@@ -149,11 +154,11 @@ MIN_JOINS_REQUIRED = os.getenv("MIN_JOINS_REQUIRED", "2")
 # Force-join gate par jo message dikhta hai (links ke upar).
 GATE_MESSAGE = os.getenv("GATE_MESSAGE", (
     "ʜᴇʟʟᴏ ᴛʜᴇʀᴇ..!⚡️\n\n"
-    "🫧ᴘʟᴇᴀsᴇ ᴊᴏɪɴ ᴏғ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ғɪʀsᴛ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ᴛʀʏ ᴀɢᴀɪɴ...!"
+    "🫧ᴘʟᴇᴀsᴇ ᴊᴏɪɴ ᴏғ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ғɪʀsᴛ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪꜰʏ...!"
 ))
 
 # Gate ka verify button ka label.
-GATE_BUTTON_TEXT = os.getenv("GATE_BUTTON_TEXT", "✅ ᴛʀʏ ᴀɢᴀɪɴ")
+GATE_BUTTON_TEXT = os.getenv("GATE_BUTTON_TEXT", "✅ ᴠᴇʀɪꜰʏ")
 
 
 # ---------------------------------------------------------------------

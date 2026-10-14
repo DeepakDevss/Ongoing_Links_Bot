@@ -73,6 +73,8 @@ from config import (
     DB_PATH,
     MEMBERSHIP_CACHE_TTL,
     MIN_JOINS_REQUIRED,
+    OWNER_ID,
+    OWNER_NAME,
     GATE_MESSAGE,
     GATE_BUTTON_TEXT,
     AI_API_KEY,
@@ -275,7 +277,13 @@ def _get_ai_config():
     global _ai_config
     if _ai_config is not None:
         return _ai_config
-    kwargs = {"system_instruction": AI_SYSTEM_PROMPT}
+    sys_prompt = AI_SYSTEM_PROMPT
+    if OWNER_NAME:
+        sys_prompt += (
+            f"\n\nThe owner of this bot is {OWNER_NAME}. If asked who owns or runs "
+            f"this bot, say it is {OWNER_NAME}. Never share any user's private data."
+        )
+    kwargs = {"system_instruction": sys_prompt}
     level = (AI_THINKING_LEVEL or "").strip().lower()
     if level and not _thinking_off:
         try:
@@ -341,13 +349,20 @@ def busy_message() -> str:
     return AI_BUSY_MESSAGE.replace("{ai_link}", ai_block["url"] if ai_block else "AI")
 
 
-async def ask_ai(prompt: str, lite: bool = False, where: str = "", chat_id=None) -> str:
+async def ask_ai(prompt: str, lite: bool = False, where: str = "", chat_id=None,
+                 note: str = "") -> str:
     """Prompt bhejo, reply lo. lite=True se sasta/fast model use hoga.
     where   = context line (group ka naam ya 'a private chat').
+    note    = extra context (jaise 'this user is the owner').
     chat_id = iske hisaab se thodi conversation memory rakhi jaati hai."""
     raw = prompt
+    bits = []
     if where:
-        prompt = f"(Context: you are in {where}.)\n\n{prompt}"
+        bits.append(f"you are in {where}")
+    if note:
+        bits.append(note)
+    if bits:
+        prompt = f"(Context: {'; '.join(bits)}.)\n\n{prompt}"
     history = _hist(chat_id) if chat_id is not None else []
     # Model kabhi "500 UNAVAILABLE / high demand" deta hai -> retry + doosra model.
     # Fail-fast: kam attempts, chhota backoff (delay kam karne ke liye).
@@ -381,6 +396,22 @@ async def ask_ai(prompt: str, lite: bool = False, where: str = "", chat_id=None)
 # =====================================================================
 def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
+
+
+def is_owner(uid: int) -> bool:
+    return OWNER_ID != 0 and int(uid) == OWNER_ID
+
+
+def is_privileged(uid: int) -> bool:
+    """Owner ya admin — inhe force-join gate NAHI dikhta."""
+    return is_owner(uid) or is_admin(uid)
+
+
+def _owner_note(uid) -> str:
+    """Owner bol raha hai to AI ko bata do (gate ke baahar)."""
+    if is_owner(uid):
+        return "the person talking to you is the owner of this bot"
+    return ""
 
 
 def _norm(s) -> str:
@@ -490,7 +521,9 @@ async def join_status(context, user_id, force=False):
 
 
 async def needs_join(context, user_id, force=False) -> bool:
-    """User ko gate dikhana hai?"""
+    """User ko gate dikhana hai? Owner/admin ko nahi."""
+    if is_privileged(user_id):
+        return False
     if not has_required_blocks():
         return False
     joined, _missing, _unknown, need = await join_status(context, user_id, force=force)
@@ -828,7 +861,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.answer(
                     f"Abhi {len(joined)}/{need} join hua hai.\n"
                     f"Ye join karo: {names}\n\n"
-                    "Join karke phir try again karo.",
+                    "Join karke phir Verify karo.",
                     show_alert=True,
                 )
         else:
@@ -956,7 +989,8 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
     await update.effective_message.reply_text(
         await ask_ai(update.effective_message.text, where="a private chat",
-                     chat_id=update.effective_chat.id)
+                     chat_id=update.effective_chat.id,
+                     note=_owner_note(user.id))
     )
 
 
@@ -988,7 +1022,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = _strip_mention(msg.text, me.username) or "The user mentioned you. Greet them warmly."
     where = f'the Telegram group "{msg.chat.title}"' if msg.chat.title else "a Telegram group"
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
-    await msg.reply_text(await ask_ai(prompt, where=where, chat_id=msg.chat.id))
+    await msg.reply_text(await ask_ai(prompt, where=where, chat_id=msg.chat.id,
+                                      note=_owner_note(update.effective_user.id)))
 
 
 # =====================================================================
