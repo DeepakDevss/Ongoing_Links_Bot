@@ -100,7 +100,7 @@ _db_lock = threading.Lock()
 
 
 def _db_default():
-    return {"users": {}, "referrals": {}, "banned": [], "stats": {"total_started": 0}}
+    return {"users": {}, "referrals": {}, "banned": [], "stats": {"total_started": 0}, "chat_ids": {}}
 
 
 def _now():
@@ -130,6 +130,28 @@ def _db_save(data):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, DB_PATH)
+
+
+_chat_ids_cache = None
+
+
+def _learned_ids():
+    """Runtime me seekhi gayi chat ids ({block name: chat id})."""
+    global _chat_ids_cache
+    if _chat_ids_cache is None:
+        with _db_lock:
+            _chat_ids_cache = dict(_db_load().get("chat_ids", {}))
+    return _chat_ids_cache
+
+
+def db_set_chat_id(name, chat_id):
+    """Block name -> numeric chat id yaad rakho (config edit ki zaroorat nahi)."""
+    global _chat_ids_cache
+    with _db_lock:
+        data = _db_load()
+        data.setdefault("chat_ids", {})[name] = int(chat_id)
+        _db_save(data)
+        _chat_ids_cache = dict(data["chat_ids"])
 
 
 _seen_cache: dict[int, float] = {}
@@ -317,9 +339,37 @@ def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
 
 
+def _norm(s) -> str:
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+def match_block_by_title(title):
+    """Title ko LINK_BLOCKS ke naam se match karo (exact, phir loose)."""
+    t = _norm(title)
+    if not t:
+        return None
+    for b in LINK_BLOCKS:
+        if _norm(b["name"]) == t:
+            return b
+    for b in LINK_BLOCKS:
+        n = _norm(b["name"])
+        if n and (n in t or t in n):
+            return b
+    return None
+
+
 def enforced_blocks():
-    """Jo blocks sach mein force-join ke liye verify ho sakte hain."""
-    return [b for b in LINK_BLOCKS if b.get("require_join") and b.get("id")]
+    """Jo blocks force-join ke liye verify ho sakte hain.
+    id config se aati hai, ya runtime me seekhi gayi id se."""
+    learned = _learned_ids()
+    out = []
+    for b in LINK_BLOCKS:
+        if not b.get("require_join"):
+            continue
+        cid = b.get("id") or learned.get(b["name"])
+        if cid:
+            out.append({**b, "id": cid})
+    return out
 
 
 # chhota membership cache: getChatMember API calls kam karne ke liye
@@ -463,22 +513,25 @@ async def send_main_menu(update: Update, context, edit=False):
 async def verify_blocks_on_startup(app: Application):
     """Start par check karo ki bot har enforced chat mein admin hai."""
     me = await app.bot.get_me()
+    learned = _learned_ids()
     for b in LINK_BLOCKS:
         if not b.get("require_join"):
             continue
-        if not b.get("id"):
+        cid = b.get("id") or learned.get(b["name"])
+        if not cid:
             log.warning(
-                "Block '%s' par require_join=True hai par id khaali — "
-                "force-join verify NAHI hoga. /getid se numeric id bharo.",
+                "Block '%s' ki numeric id nahi hai — force-join verify NAHI hoga. "
+                "Bot ko us chat me admin banao, phir /getid (message forward) ya "
+                "/setid <name> <id> use karo.",
                 b["name"],
             )
             continue
         try:
-            member = await app.bot.get_chat_member(chat_id=b["id"], user_id=me.id)
+            member = await app.bot.get_chat_member(chat_id=cid, user_id=me.id)
             if member.status not in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
                 log.warning("Bot '%s' mein ADMIN nahi hai — gate enforce nahi hoga.", b["name"])
         except Exception as e:
-            log.warning("Block '%s' verify fail (id=%s): %s", b["name"], b["id"], e)
+            log.warning("Block '%s' verify fail (id=%s): %s", b["name"], cid, e)
 
 
 # =====================================================================
@@ -530,7 +583,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — this message\n\n"
         "Chat with AI: in private, just type your question.\n"
         f"In a group, mention the bot (e.g. {BOT_USERNAME} hello).\n\n"
-        f"{fonts.small_caps('Admin')}: /stats /broadcast /ban /unban /getid"
+        f"{fonts.small_caps('Admin')}: /stats /broadcast /ban /unban /getid /setid"
     )
     await update.effective_message.reply_text(text)
 
@@ -624,27 +677,62 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: channel/group ka message bot ko FORWARD karo -> ID milega."""
+    """Admin: channel/group ka message bot ko FORWARD karo -> numeric id milega
+    (aur seedha save bhi ho jayega — config edit karne ki zaroorat nahi)."""
     if not is_admin(update.effective_user.id):
         return
     msg = update.effective_message
     fwd = getattr(msg, "forward_from_chat", None)
     if fwd:
+        b = match_block_by_title(fwd.title)
+        saved = ""
+        if b:
+            db_set_chat_id(b["name"], fwd.id)
+            saved = (
+                f"\n\nSaved: \"{b['name']}\" -> {fwd.id}\n"
+                "Ab force-join verify ise check karega."
+            )
         await msg.reply_text(
             f"Chat: {fwd.title}\n"
             f"Numeric id: {fwd.id}\n"
-            f"Type: {fwd.type}\n\n"
-            "config.py -> LINK_BLOCKS -> us block ke \"id\" me ye number daal do.\n"
-            "(Bot us chat me admin hona chahiye.)"
+            f"Type: {fwd.type}{saved}"
         )
     else:
         await msg.reply_text(
-            "Us channel/group ka koi message yahan forward karo, main numeric id "
-            "bata dunga.\n"
-            "Ye id LINK_BLOCKS ke \"id\" me daalni hoti hai — tabhi force-join "
-            "verify hota hai.\n"
+            "Us channel/group ka koi message yahan forward karo — main numeric id "
+            "bata dunga aur khud save kar dunga.\n"
             "(Bot us chat me admin hona chahiye.)"
         )
+
+
+async def cmd_setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /setid <block name> <numeric id> — id yaad rakho (config edit nahi)."""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args or []
+    if len(args) < 2:
+        names = "\n".join(f"  - {b['name']}" for b in LINK_BLOCKS)
+        await update.effective_message.reply_text(
+            "Use: /setid <block name> <numeric id>\n\nBlocks:\n" + names
+        )
+        return
+    *name_parts, raw_id = args
+    name = " ".join(name_parts)
+    try:
+        cid = int(raw_id)
+    except ValueError:
+        await update.effective_message.reply_text("Numeric id chahiye, jaise -1001234567890")
+        return
+    b = match_block_by_title(name)
+    if not b:
+        await update.effective_message.reply_text(
+            f"Block '{name}' nahi mila. /setid bina kuch likhe bhejo — list aa jayegi."
+        )
+        return
+    db_set_chat_id(b["name"], cid)
+    await update.effective_message.reply_text(
+        f"Saved: \"{b['name']}\" -> {cid}\nAb verify ise check karega."
+    )
 
 
 # =====================================================================
@@ -743,6 +831,34 @@ def _strip_mention(text: str, username: str) -> str:
     return text.strip()
 
 
+async def learn_chat_id(update: Update, context):
+    """Jis chat me bot hai, uska numeric id seekho (title kisi block se match kare to)."""
+    chat = update.effective_chat
+    if not chat or not chat.title:
+        return
+    b = match_block_by_title(chat.title)
+    if not b:
+        return
+    if _learned_ids().get(b["name"]) == chat.id:
+        return
+    db_set_chat_id(b["name"], chat.id)
+    log.info("Learned chat id: %s -> %s", b["name"], chat.id)
+    for admin in ADMIN_IDS:
+        try:
+            await context.bot.send_message(
+                admin,
+                f"Chat id mil gayi: \"{b['name']}\" -> {chat.id}\n"
+                "Ab force-join verify ise check karega.",
+            )
+        except Exception:
+            pass
+
+
+async def on_chat_seen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Channel post par bhi id seekho (bot us channel me admin ho to)."""
+    await learn_chat_id(update, context)
+
+
 async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Private chat mein AI bina mention chalta hai — seedha sawaal likho."""
     user = update.effective_user
@@ -765,6 +881,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text:
         return
+    await learn_chat_id(update, context)
     me = await _get_me(context)
     mentioned = False
     for e in (msg.entities or []):
@@ -815,9 +932,11 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("ban", cmd_ban))
     app.add_handler(CommandHandler("unban", cmd_unban))
     app.add_handler(CommandHandler("getid", cmd_getid))
+    app.add_handler(CommandHandler("setid", cmd_setid))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, on_chat_seen))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, on_group_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, on_private_message))
