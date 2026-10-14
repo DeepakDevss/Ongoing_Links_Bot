@@ -224,6 +224,14 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 
 ---
 
+## Related projects
+
+- **Linnet | AI Companion** — A Telegram AI bot with persistent memory, media understanding, and voice replies.
+  Repository: https://github.com/DeepakDevss/Linnet_AI_Telegram
+  Bot: https://t.me/Linnet_Agents_Bot
+
+---
+
 ## Author
 
 Deepak Devs
