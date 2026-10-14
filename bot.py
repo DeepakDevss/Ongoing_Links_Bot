@@ -25,6 +25,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -67,6 +68,7 @@ from config import (
     WELCOME_IMAGE,
     AUTO_APPROVE_JOIN_REQUESTS,
     WEBHOOK_URL,
+    WEBHOOK_SECRET,
     PORT,
     DB_PATH,
     MEMBERSHIP_CACHE_TTL,
@@ -263,6 +265,7 @@ def _get_ai():
 
 
 _ai_config = None
+_thinking_off = False
 
 
 def _get_ai_config():
@@ -274,7 +277,7 @@ def _get_ai_config():
         return _ai_config
     kwargs = {"system_instruction": AI_SYSTEM_PROMPT}
     level = (AI_THINKING_LEVEL or "").strip().lower()
-    if level:
+    if level and not _thinking_off:
         try:
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level)
         except Exception:
@@ -287,11 +290,44 @@ def _get_ai_config():
     return _ai_config
 
 
-def _run_ai(model: str, prompt: str) -> str:
+def _disable_thinking():
+    """Model ne thinking config reject kiya -> bina thinking par switch (self-heal)."""
+    global _thinking_off, _ai_config
+    if not _thinking_off:
+        _thinking_off = True
+        _ai_config = None
+        log.warning("Thinking config hata di — model ne accept nahi kiya.")
+
+
+# --- chhoti conversation memory (per chat) -----------------------------
+_HISTORY_TURNS = 6          # per chat kitne user+bot turns yaad rakhe
+_HISTORY_CHATS = 1000       # kitne chats ki memory (bound, memory leak nahi)
+_history: dict = {}
+
+
+def _hist(chat_id):
+    return _history.get(chat_id, [])
+
+
+def _hist_add(chat_id, role, text):
+    h = _history.setdefault(chat_id, [])
+    h.append((role, text))
+    if len(h) > _HISTORY_TURNS * 2:
+        del h[: len(h) - _HISTORY_TURNS * 2]
+    if len(_history) > _HISTORY_CHATS:
+        for k in list(_history.keys())[: len(_history) - _HISTORY_CHATS]:
+            _history.pop(k, None)
+
+
+def _run_ai(model: str, prompt: str, history=None) -> str:
     client = _get_ai()
+    contents = []
+    for role, text in (history or []):
+        contents.append(types.Content(role=role, parts=[types.Part(text=text)]))
+    contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
     resp = client.models.generate_content(
         model=model,
-        contents=prompt,
+        contents=contents,
         config=_get_ai_config(),
     )
     return (getattr(resp, "text", None) or "").strip()
@@ -305,12 +341,14 @@ def busy_message() -> str:
     return AI_BUSY_MESSAGE.replace("{ai_link}", ai_block["url"] if ai_block else "AI")
 
 
-async def ask_ai(prompt: str, lite: bool = False, where: str = "") -> str:
+async def ask_ai(prompt: str, lite: bool = False, where: str = "", chat_id=None) -> str:
     """Prompt bhejo, reply lo. lite=True se sasta/fast model use hoga.
-    where = context line (group ka naam ya 'a private chat') — AI ko batata
-    hai ki wo kahan hai, taaki poochne par sahi jagah ka naam bata sake."""
+    where   = context line (group ka naam ya 'a private chat').
+    chat_id = iske hisaab se thodi conversation memory rakhi jaati hai."""
+    raw = prompt
     if where:
         prompt = f"(Context: you are in {where}.)\n\n{prompt}"
+    history = _hist(chat_id) if chat_id is not None else []
     # Model kabhi "500 UNAVAILABLE / high demand" deta hai -> retry + doosra model.
     # Fail-fast: kam attempts, chhota backoff (delay kam karne ke liye).
     models = [AI_MODEL_LITE, AI_MODEL] if lite else [AI_MODEL, AI_MODEL_LITE]
@@ -318,14 +356,20 @@ async def ask_ai(prompt: str, lite: bool = False, where: str = "") -> str:
     for model in models:
         for attempt in range(2):
             try:
-                text = await asyncio.to_thread(_run_ai, model, prompt)
+                text = await asyncio.to_thread(_run_ai, model, prompt, history)
                 if text:
                     if len(text) > AI_MAX_CHARS:
                         text = text[: AI_MAX_CHARS - 20].rstrip() + "\n\n… (shortened)"
+                    if chat_id is not None:
+                        _hist_add(chat_id, "user", raw)
+                        _hist_add(chat_id, "model", text)
                     return text
             except Exception as e:
                 last_err = e
                 log.warning("AI fail (model=%s try=%s): %s", model, attempt + 1, e)
+                low = str(e).lower()
+                if "thinking" in low or "unsupported" in low or "invalid" in low:
+                    _disable_thinking()
                 await asyncio.sleep(0.6 * (attempt + 1))  # chhota backoff
     log.error("AI poora fail: %s", last_err)
     # User ko kabhi provider ka naam nahi dikhna chahiye.
@@ -353,7 +397,9 @@ def match_block_by_title(title):
             return b
     for b in LINK_BLOCKS:
         n = _norm(b["name"])
-        if n and (n in t or t in n):
+        # Loose match sirf tab jab naam kaafi lamba ho — warna "AI" jaisa
+        # chhota naam "MAIN" me bhi match ho jata hai.
+        if len(n) >= 6 and (n in t or t in n):
             return b
     return None
 
@@ -386,7 +432,8 @@ async def _get_me(context):
     return _bot_me
 
 
-async def _is_member(context, chat_id, user_id, force=False) -> bool:
+async def _is_member(context, chat_id, user_id, force=False):
+    """True = member, False = not member, None = check hi nahi ho paya."""
     key = (int(user_id), str(chat_id))
     now = time.time()
     cached = _member_cache.get(key)
@@ -396,12 +443,12 @@ async def _is_member(context, chat_id, user_id, force=False) -> bool:
         member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         ok = member.status not in NOT_MEMBER_STATUSES
     except Exception as e:
-        # Bot us chat mein admin nahi / id galat -> verify nahi hua.
-        # Fail mode: "closed" = andar mat aane do (safe); "open" = andar aane do.
+        # Bot us chat mein admin nahi / id galat -> verify nahi ho paya.
+        # None = "pata nahi". JOIN_FAIL_MODE "open" ho to joined maano.
         log.warning("Membership check fail for %s: %s", chat_id, e)
-        if JOIN_FAIL_MODE == "open":
-            return True
-        return False
+        result = True if JOIN_FAIL_MODE == "open" else None
+        _member_cache[key] = (result, now)
+        return result
     _member_cache[key] = (ok, now)
     return ok
 
@@ -427,22 +474,26 @@ def has_required_blocks() -> bool:
 
 
 async def join_status(context, user_id, force=False):
-    """(joined_list, missing_list, need).
+    """(joined, missing, unknown, need).
+    unknown = jinhe check hi nahi kar paye (bot admin nahi / id galat).
     force=True -> cache ignore karo, fresh check (Check button ke liye)."""
-    joined, missing = [], []
+    joined, missing, unknown = [], [], []
     for chat in enforced_blocks():
-        if await _is_member(context, chat["id"], user_id, force=force):
+        r = await _is_member(context, chat["id"], user_id, force=force)
+        if r is True:
             joined.append(chat)
-        else:
+        elif r is False:
             missing.append(chat)
-    return joined, missing, required_count()
+        else:
+            unknown.append(chat)
+    return joined, missing, unknown, required_count()
 
 
 async def needs_join(context, user_id, force=False) -> bool:
     """User ko gate dikhana hai?"""
     if not has_required_blocks():
         return False
-    joined, _missing, need = await join_status(context, user_id, force=force)
+    joined, _missing, _unknown, need = await join_status(context, user_id, force=force)
     if need <= 0:
         # Koi verifiable block nahi (numeric IDs config me nahi hain) ->
         # gate dikhta hai par verify nahi ho sakta (admin ko IDs daalni hongi).
@@ -490,20 +541,6 @@ async def send_join_gate(update: Update, context, edit=False):
     kb = link_keyboard(extra_rows=[
         [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
     ])
-    if edit and update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=kb)
-    else:
-        await update.effective_message.reply_text(text, reply_markup=kb)
-
-
-async def send_main_menu(update: Update, context, edit=False):
-    user = update.effective_user
-    text = (
-        f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
-        f"I am {fonts.bold(BOT_BRAND)}, your AI assistant.\n"
-        "Ask me anything — just type your question, or use the buttons below."
-    )
-    kb = link_keyboard()
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb)
     else:
@@ -571,7 +608,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await needs_join(context, user.id):
         await send_join_gate(update, context)
     else:
-        await send_main_menu(update, context)
+        # Menu nahi — seedha chat.
+        await update.effective_message.reply_text(
+            f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
+            f"I am {fonts.bold(BOT_BRAND)}. Just type your question."
+        )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -583,7 +624,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — this message\n\n"
         "Chat with AI: in private, just type your question.\n"
         f"In a group, mention the bot (e.g. {BOT_USERNAME} hello).\n\n"
-        f"{fonts.small_caps('Admin')}: /stats /broadcast /ban /unban /getid /setid"
+        f"{fonts.small_caps('Admin')}: /stats /broadcast /ban /unban /getid /setid /diag"
     )
     await update.effective_message.reply_text(text)
 
@@ -735,6 +776,32 @@ async def cmd_setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: har block ka status — id hai? bot admin hai? verify hoga?"""
+    if not is_admin(update.effective_user.id):
+        return
+    me = await _get_me(context)
+    learned = _learned_ids()
+    lines = []
+    for b in LINK_BLOCKS:
+        if not b.get("require_join"):
+            lines.append(f"{b['name']}: link-only (check nahi hota)")
+            continue
+        cid = b.get("id") or learned.get(b["name"])
+        if not cid:
+            lines.append(f"{b['name']}: ID nahi hai — check nahi hoga")
+            continue
+        try:
+            m = await context.bot.get_chat_member(chat_id=cid, user_id=me.id)
+            ok = m.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER)
+            lines.append(f"{b['name']}: id={cid} | bot admin: {'haan' if ok else 'NAHI'}")
+        except Exception as e:
+            lines.append(f"{b['name']}: id={cid} | check FAIL ({type(e).__name__})")
+    await update.effective_message.reply_text(
+        "Diagnostics\n\n" + "\n".join(lines) + f"\n\nRequired joins: {required_count()}"
+    )
+
+
 # =====================================================================
 #  CALLBACKS
 # =====================================================================
@@ -747,15 +814,33 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_join":
         # Strict: cache ignore karke fresh check — join karke turant chhod diya
         # ho, ya cache purana ho, to bhi pakda jaye.
-        joined, missing, need = await join_status(context, user.id, force=True)
+        joined, missing, unknown, need = await join_status(context, user.id, force=True)
         if need > 0 and len(joined) < need:
-            await q.answer(
-                f"Abhi {len(joined)}/{need} join hua hai. "
-                f"Kam se kam {need} channel join karo, phir try again karo.",
-                show_alert=True,
-            )
+            if unknown and not missing:
+                # Bot check hi nahi kar paya -> ye admin ka setup problem hai.
+                await q.answer(
+                    "Setup problem: bot in channels me admin nahi hai (ya id galat). "
+                    "Admin ko bolo — tabhi verify hoga.",
+                    show_alert=True,
+                )
+            else:
+                names = ", ".join(b["name"] for b in missing)
+                await q.answer(
+                    f"Abhi {len(joined)}/{need} join hua hai.\n"
+                    f"Ye join karo: {names}\n\n"
+                    "Join karke phir try again karo.",
+                    show_alert=True,
+                )
         else:
-            await send_main_menu(update, context, edit=True)
+            # Verify ho gaya — gate message hata do, koi doosra menu/message nahi.
+            try:
+                await q.message.delete()
+            except Exception as e:
+                log.warning("Gate delete fail: %s", e)
+                try:
+                    await q.edit_message_text("Verified. Ab seedha apna sawaal likho.")
+                except Exception:
+                    pass
 
 
 # =====================================================================
@@ -870,7 +955,8 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
     await update.effective_message.reply_text(
-        await ask_ai(update.effective_message.text, where="a private chat")
+        await ask_ai(update.effective_message.text, where="a private chat",
+                     chat_id=update.effective_chat.id)
     )
 
 
@@ -902,7 +988,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = _strip_mention(msg.text, me.username) or "The user mentioned you. Greet them warmly."
     where = f'the Telegram group "{msg.chat.title}"' if msg.chat.title else "a Telegram group"
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
-    await msg.reply_text(await ask_ai(prompt, where=where))
+    await msg.reply_text(await ask_ai(prompt, where=where, chat_id=msg.chat.id))
 
 
 # =====================================================================
@@ -933,6 +1019,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("unban", cmd_unban))
     app.add_handler(CommandHandler("getid", cmd_getid))
     app.add_handler(CommandHandler("setid", cmd_setid))
+    app.add_handler(CommandHandler("diag", cmd_diag))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
@@ -953,7 +1040,9 @@ def run_webhook(app: Application):
     from fastapi import FastAPI, Request, Response
     import uvicorn
 
-    webhook_path = f"/telegram/{BOT_TOKEN}"
+    # Path me BOT_TOKEN NAHI daalte (warna logs/screenshot se token leak hota hai).
+    secret = WEBHOOK_SECRET or hashlib.sha256(BOT_TOKEN.encode()).hexdigest()[:32]
+    webhook_path = f"/tg/{secret}"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -963,9 +1052,10 @@ def run_webhook(app: Application):
             url=f"{WEBHOOK_URL}{webhook_path}",
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
+            secret_token=secret,
         )
         await app.start()
-        log.info("Webhook set: %s%s", WEBHOOK_URL, webhook_path)
+        log.info("Webhook set: %s/tg/*** (path chhupa diya)", WEBHOOK_URL)
         yield
         await app.stop()
         await app.shutdown()
@@ -974,6 +1064,9 @@ def run_webhook(app: Application):
 
     @api.post(webhook_path)
     async def telegram_webhook(request: Request):
+        # Telegram har request me ye header bhejta hai — match na ho to reject.
+        if request.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != secret:
+            return Response(status_code=403)
         update = Update.de_json(await request.json(), app.bot)
         await app.process_update(update)
         return Response(status_code=200)

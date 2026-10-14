@@ -182,6 +182,10 @@ AUTO_APPROVE_JOIN_REQUESTS = (
 # ---------------------------------------------------------------------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "") or os.getenv("RENDER_EXTERNAL_URL", "")
 PORT = int(os.getenv("PORT", "10000"))
+
+# Webhook ka secret path. Khaali chhodo to BOT_TOKEN se apne aap ban jaata hai.
+# Isse bot token seedha URL me NAHI aata — Render logs / screenshots se leak nahi hota.
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 DB_PATH = os.getenv("DB_PATH", "data/db.json")
 
 

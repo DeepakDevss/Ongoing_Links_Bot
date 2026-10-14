@@ -59,19 +59,38 @@ runtime data.
 | `LINK_BLOCKS` | Buttons + which chats are force-join (same `row` = side by side) | `#4` |
 | `JOIN_FAIL_MODE` | `closed` (recommended) or `open` | `#5` |
 | `WELCOME_TEMPLATE` / `WELCOME_IMAGE` | Welcome text (blank = built-in styled text) and image | `#6` |
+| `MIN_JOINS_REQUIRED` | How many required chats must be joined (`"2"`, `"1"`, `"all"`) | `#5` |
+| `GATE_MESSAGE` / `GATE_BUTTON_TEXT` | Text above the links, and the verify button label | `#5` |
+| `AI_THINKING_LEVEL` | `minimal` (fastest) / `low` / `medium` / `high` / `""` | `#8` |
+| `AI_BUSY_MESSAGE` | What users see when the AI is overloaded | `#8` |
+| `MEMBERSHIP_CACHE_TTL` | Seconds a membership result is cached | `#5` |
+| `WEBHOOK_SECRET` | Optional; keeps the bot token out of the webhook URL | `#7` |
 
-### Force-join needs numeric chat IDs
+### Making the force-join gate actually verify
 
-A Telegram **invite link** (`t.me/+xxxx`) cannot be used to verify membership.
-To enforce a join you need the chat's **numeric ID**:
+A Telegram **invite link** (`t.me/+xxxx`) cannot be used to verify membership —
+you need the chat's **numeric ID**. The bot must also be an **admin** in that
+chat (a plain member is not enough; without admin rights Telegram refuses the
+membership check).
 
-1. Make the bot an **admin** in that channel/group.
-2. Forward any message from that chat to the bot and send `/getid`.
-3. Put the returned ID in that block's `"id"` field in `LINK_BLOCKS`.
+Three ways to get an ID in, none of which needs a file edit:
 
-Public chats also accept `"@username"`. A block marked `"require_join": True`
-with an empty `"id"` will only show as a button — it will **not** be enforced,
-and the bot logs a warning about it on startup.
+1. **`/diag`** — run this first. It lists every block with its ID (if any) and
+   whether the bot is admin there. This tells you exactly what is missing.
+2. **`/getid`** — forward any message from the chat to the bot; it reports the
+   numeric ID **and saves it**.
+3. **`/setid <block name> <numeric id>`** — set it directly.
+
+The bot also learns IDs on its own from channel posts and join requests (it DMs
+you the ID when it finds one). Learned IDs live in `data/db.json`, which resets
+on Render redeploy — copy them into `config.py` for permanence.
+
+Public chats also accept `"@username"` directly in the `"id"` field — the
+easiest option if you can make the chat public.
+
+`MIN_JOINS_REQUIRED` decides how many of the required chats must be joined
+(`"2"` = any two, `"all"` = every one). A block marked `"require_join": True`
+with no usable ID is only shown as a button and **cannot** be enforced.
 
 > **`JOIN_FAIL_MODE`:** with `closed`, if the bot cannot verify membership
 > (not admin, or wrong ID), the user is **not** let through — the gate holds.
@@ -139,6 +158,9 @@ python bot.py             # polling mode when WEBHOOK_URL is empty
 | `AI_MODEL` | model ID | Optional |
 | `AI_MODEL_LITE` | model ID | Optional |
 | `AUTO_APPROVE_JOIN_REQUESTS` | `True` | Optional |
+| `JOIN_FAIL_MODE` | `closed` | Optional |
+| `MIN_JOINS_REQUIRED` | `2` | Optional |
+| `AI_THINKING_LEVEL` | `minimal` | Optional |
 | `PYTHON_VERSION` | `3.12.13` | Optional |
 
 Do **not** set `WEBHOOK_URL` or `PORT` — Render provides them.
@@ -157,10 +179,10 @@ as "Down".
 
 ## Bot usage
 
-- **Private:** `/start` → join gate → "Check" → menu → type your question.
-- **Group:** new member → welcome photo + caption. AI replies to `@mentions`.
+- **Private:** `/start` → join gate → verify → type your question (no extra menu).
+- **Group:** new member → welcome photo + caption. AI replies to `@mentions` only.
 - **Referral:** `/ref` → your link → share.
-- **Admin:** `/stats`, `/broadcast <msg>`, `/ban <id>`, `/unban <id>`, `/getid`.
+- **Admin:** `/stats`, `/broadcast <msg>`, `/ban <id>`, `/unban <id>`, `/getid`, `/setid`, `/diag`.
 
 ---
 
