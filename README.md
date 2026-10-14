@@ -1,217 +1,239 @@
-# Linnet Bot
+# Ongoing Links
 
-A Telegram community bot: force-join gate, welcome messages, AI chat, and a
-referral system. Deploy-ready on Render via webhook.
+A Telegram community bot that gates access behind channel membership, welcomes new members, answers messages with AI, auto-approves join requests, and grows through a referral system. Runs on Render as a webhook service.
 
-This repository is source code only. It contains no secrets, no keys, and no
-runtime data.
-
----
-
-## What it does
-
-1. **Force-join gate** — before a user can use the bot, they must join the
-   channels/groups listed in `config.py` (`LINK_BLOCKS`). Nothing is enforced
-   until you fill in the chat IDs (see below).
-2. **Auto-approve join requests** — join requests are approved automatically.
-3. **Welcome message** — a photo plus a caption is posted when a new member joins.
-4. **AI chat** — in private chat on any message; in groups only when the bot is
-   `@mentioned` or replied to. Membership is checked in groups too, so the gate
-   cannot be bypassed from a group.
-5. **Referral / invite growth** — every user gets their own link and invite count.
-
-**Stack:** Python 3.12, python-telegram-bot v22, FastAPI (webhook), Render.
+- Bot: https://t.me/ANIME_WORLD_8BOT
+- Repository: https://github.com/DeepakDevss/Telegram_Invited_AIBot
 
 ---
 
-## Files
+## Overview
 
-| File | Purpose | Goes to GitHub? |
-|---|---|---|
-| `config.py` | All settings — the only file you edit | Yes |
-| `bot.py` | The bot (database, AI, handlers, server) | Yes |
-| `fonts.py` | Unicode text styling (small-caps / bold) | Yes |
-| `requirements.txt` | Python packages | Yes |
-| `render.yaml` | Render blueprint (optional) | Yes |
-| `env.example.txt` | Environment variable template (no secrets) | Yes |
-| `gitignore.txt` | Rename to `.gitignore` before pushing | Yes |
-| `README.md` | This file | Yes |
-| `welcome.png` | Welcome image | Yes |
-| `.env` | Your real secrets | **No** (ignored) |
-| `data/db.json` | Runtime data | **No** (ignored) |
+Ongoing Links runs as a webhook-based Python service. It handles community management (force-join gate, auto-approval of join requests, welcome messages, referral tracking) alongside an AI chat layer that replies to every private message and to group messages that mention the bot or reply to it.
 
-> Rename `env.example.txt` to `.env.example` and `gitignore.txt` to `.gitignore`
-> before pushing (dotfiles are hidden in Windows Explorer / macOS Finder —
-> enable "Show hidden items" / press `Cmd + Shift + .`).
+The force-join check runs in both private and group chats, so adding the bot to a group doesn't get anyone past the gate. All settings live in one file (`config.py`), and all runtime data is kept in a local JSON database.
 
 ---
 
-## Step 1 — Edit `config.py`
+## Features
 
-| Setting | What to put | Where |
-|---|---|---|
-| `BOT_TOKEN` | Token from BotFather (`/newbot`) | `#1` |
-| `BOT_USERNAME` | e.g. `@LinnetBot` | `#1b` |
-| `BOT_BRAND` | Public name shown to users (default `Linnet`) | `#1c` |
-| `AI_API_KEY` | Your AI provider API key | `#2` |
-| `AI_MODEL` / `AI_MODEL_LITE` | Model IDs (defaults are set) | `#2b` |
-| `ADMIN_IDS` | Your Telegram user ID (send `/id` to the bot) | `#3` |
-| `OWNER_ID` / `OWNER_NAME` | Bot owner — skips the force-join gate entirely | `#3b` |
-| `LINK_BLOCKS` | Buttons + which chats are force-join (same `row` = side by side) | `#4` |
-| `JOIN_FAIL_MODE` | `closed` (recommended) or `open` | `#5` |
-| `WELCOME_TEMPLATE` / `WELCOME_IMAGE` | Welcome text (blank = built-in styled text) and image | `#6` |
-| `MIN_JOINS_REQUIRED` | How many required chats must be joined (`"2"`, `"1"`, `"all"`) | `#5` |
-| `GATE_MESSAGE` / `GATE_BUTTON_TEXT` | Text above the links, and the verify button label | `#5` |
-| `AI_THINKING_LEVEL` | `minimal` (fastest) / `low` / `medium` / `high` / `""` | `#8` |
-| `AI_BUSY_MESSAGE` | What users see when the AI is overloaded | `#8` |
-| `MEMBERSHIP_CACHE_TTL` | Seconds a membership result is cached | `#5` |
-| `WEBHOOK_SECRET` | Optional; keeps the bot token out of the webhook URL | `#7` |
-
-### Making the force-join gate actually verify
-
-A Telegram **invite link** (`t.me/+xxxx`) cannot be used to verify membership —
-you need the chat's **numeric ID**. The bot must also be an **admin** in that
-chat (a plain member is not enough; without admin rights Telegram refuses the
-membership check).
-
-Three ways to get an ID in, none of which needs a file edit:
-
-1. **`/diag`** — run this first. It lists every block with its ID (if any) and
-   whether the bot is admin there. This tells you exactly what is missing.
-2. **`/getid`** — forward any message from the chat to the bot; it reports the
-   numeric ID **and saves it**.
-3. **`/setid <block name> <numeric id>`** — set it directly.
-
-The bot also learns IDs on its own from channel posts and join requests (it DMs
-you the ID when it finds one). Learned IDs live in `data/db.json`, which resets
-on Render redeploy — copy them into `config.py` for permanence.
-
-Public chats also accept `"@username"` directly in the `"id"` field — the
-easiest option if you can make the chat public.
-
-`MIN_JOINS_REQUIRED` decides how many of the required chats must be joined
-(`"2"` = any two, `"all"` = every one). A block marked `"require_join": True`
-with no usable ID is only shown as a button and **cannot** be enforced.
-
-> **`JOIN_FAIL_MODE`:** with `closed`, if the bot cannot verify membership
-> (not admin, or wrong ID), the user is **not** let through — the gate holds.
-> With `open`, the user is let through — the gate is effectively bypassable.
-> Use `closed` in production.
+- **Force-join gate** — Users must join the configured channels before the bot will respond. Applies in private chats and in groups.
+- **Auto-approval of join requests** — Incoming join requests to the target chat are approved automatically.
+- **Welcome message** — New members get a photo caption welcome.
+- **AI chat** — Every private message gets an AI reply. In groups, the bot replies only when mentioned or replied to.
+- **Referral system** — Each user gets a personal invite link. Invite counts are tracked and shown through `/ref`.
+- **Admin controls** — Broadcast, ban, unban, member lookup, ID management, and diagnostics for configured admins.
+- **Webhook deployment** — Runs behind FastAPI on Render. No polling loop.
 
 ---
 
-## Step 2 — Push to GitHub
+## Stack
 
-Push with the command line, not the website "Upload files" button — the website
-upload ignores `.gitignore` and can publish your `.env`.
-
-```bash
-git init
-git add -A
-git commit -m "Linnet bot"
-git branch -M main
-git remote add origin https://github.com/<username>/<repo>.git
-git push -u origin main
-```
-
-Verify with `git status` — `.gitignore` and `render.yaml` should appear.
-
-If the push is rejected because the remote already has commits:
-
-```bash
-git pull origin main --allow-unrelated-histories
-git push origin main
-```
-
----
-
-## Step 3 — Local test (optional)
-
-```bash
-pip install -r requirements.txt
-cp .env.example .env      # then fill in your values
-python bot.py             # polling mode when WEBHOOK_URL is empty
-```
-
----
-
-## Step 4 — Deploy on Render
-
-1. Render → **New +** → **Web Service** → connect the GitHub repo.
-2. Settings:
-
-| Field | Value |
+| Component | Technology |
 |---|---|
-| Runtime | `Python 3` |
-| Build Command | `pip install -r requirements.txt` |
-| Start Command | `python bot.py` |
-| Instance Type | `Free` |
-| Health Check Path | `/health` |
-
-3. **Environment Variables** (Dashboard → Environment):
-
-| Key | Value | Required |
-|---|---|---|
-| `BOT_TOKEN` | BotFather token | Yes |
-| `BOT_USERNAME` | `@YourBot` | Yes |
-| `AI_API_KEY` | Your AI provider key | Yes |
-| `ADMIN_IDS` | Your user ID | Yes |
-| `AI_MODEL` | model ID | Optional |
-| `AI_MODEL_LITE` | model ID | Optional |
-| `AUTO_APPROVE_JOIN_REQUESTS` | `True` | Optional |
-| `JOIN_FAIL_MODE` | `closed` | Optional |
-| `MIN_JOINS_REQUIRED` | `2` | Optional |
-| `AI_THINKING_LEVEL` | `minimal` | Optional |
-| `PYTHON_VERSION` | `3.12.13` | Optional |
-
-Do **not** set `WEBHOOK_URL` or `PORT` — Render provides them.
-
-4. Create the service. The bot registers its webhook automatically.
-
-**Keep the free tier awake:** a free web service sleeps after ~15 min idle. Ping
-it every 5–10 min with UptimeRobot or cron-job.org, using the **`/health`** URL
-(`https://your-app.onrender.com/health`). The root URL returns 403/405 and shows
-as "Down".
-
-> `render.yaml` is only used by Render's **Blueprint** deploy. With a normal Web
-> Service it is ignored and you type the Build/Start commands yourself.
+| Language | Python 3.12 |
+| Bot framework | python-telegram-bot v22 |
+| Web framework | FastAPI (webhook server) |
+| Deployment | Render |
+| Storage | Local JSON database (`data/db.json`) |
 
 ---
 
-## Bot usage
+## Requirements
 
-- **Private:** `/start` → join gate → verify → type your question (no extra menu).
-- **Group:** new member → welcome photo + caption. AI replies to `@mentions` only.
-- **Referral:** `/ref` → your link → share.
-- **Admin:** `/stats`, `/broadcast <msg>`, `/ban <id>`, `/unban <id>`, `/getid`, `/setid`, `/diag`.
+- Python 3.12 or newer
+- A Telegram bot token from BotFather
+- An API key for the AI provider used by the bot
+- The numeric Telegram user ID of the bot administrator
+- One or more channel or group IDs to enforce the force-join gate against
 
 ---
 
-## Notes and limits
+## Project Structure
 
-- **Rate limits:** 1 message/second per chat, ~20/minute per group,
-  `getChatMember` ~30/second. The bot includes `AIORateLimiter`, a membership
-  cache (60s), and broadcast jitter. A `429` response carries `retry_after` —
-  respect it.
-- **No auto-add:** there is no Bot API method to add members to a group. Any
-  tool that claims to "auto-add members" logs in as a user account and spams —
-  that gets the account banned. This bot only uses invite links.
-- **Broadcast** only reaches users who have started the bot (opt-in). Cold DMs
-  are not possible via the Bot API.
-- **Data:** on Render's free tier, `data/db.json` can reset on restart/redeploy.
-  For scale, move to Postgres/MongoDB.
+```
+Telegram_Invited_AIBot/
+├── bot.py               Bot logic, database, AI, handlers, webhook server
+├── config.py            All settings — the only file that must be edited
+├── fonts.py             Unicode text styling helpers
+├── requirements.txt     Python dependencies
+├── render.yaml          Render blueprint (optional)
+├── env.example.txt      Environment variable template (no secrets)
+├── gitignore.txt        Rename to .gitignore before pushing
+├── welcome.png          Welcome image
+└── README.md
+```
+
+Runtime files, created automatically and not committed:
+
+```
+.env                Real credentials (never commit)
+data/db.json        Persistent user, chat, and referral data
+```
+
+---
+
+## Setup
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/DeepakDevss/Telegram_Invited_AIBot.git
+cd Telegram_Invited_AIBot
+```
+
+### 2. Install dependencies
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 3. Configure
+
+Copy the environment template and fill in the values:
+
+```bash
+cp env.example.txt .env
+```
+
+Then open `config.py` and set every value listed under Configuration below. For a standard deployment, `config.py` is the only file you need to edit.
+
+### 4. Prepare the repository for GitHub
+
+Rename `gitignore.txt` to `.gitignore` before pushing. This keeps `.env` and `data/db.json` out of your commits.
+
+```bash
+git mv gitignore.txt .gitignore
+```
+
+### 5. Run locally (optional)
+
+```bash
+python bot.py
+```
+
+---
+
+## Configuration
+
+All settings live in `config.py`. The important ones are grouped below.
+
+### Credentials
+
+| Setting | Purpose |
+|---|---|
+| Bot token | Telegram bot token issued by BotFather |
+| AI API key | Credentials for the AI provider |
+| Admin user ID | Numeric Telegram user ID of the primary administrator |
+
+### Force-join gate
+
+| Setting | Purpose |
+|---|---|
+| Channel or group IDs | The chats a user must join before using the bot |
+| MIN_JOINS_REQUIRED | How many of those chats must be joined |
+| LINK_BLOCKS | Groupings used to organise the join buttons |
+| JOIN_FAIL_MODE | Behaviour when the join check cannot be completed |
+
+### Welcome and referrals
+
+| Setting | Purpose |
+|---|---|
+| Welcome image and caption | Message sent to new members |
+| Referral reward rules | Conditions under which invite counts increase |
+
+Refer to `config.py` for the exact variable names, accepted values, and inline comments.
+
+---
+
+## Deploy on Render
+
+1. Push the repository to GitHub.
+2. Create a new Web Service on Render and connect the repository.
+3. Set the build command to `pip install -r requirements.txt`.
+4. Set the start command to `python bot.py`.
+5. Add the environment variables from your local `.env` in the Render dashboard.
+6. Set the public URL of the service as the webhook URL used by the bot.
+7. Attach a persistent disk and point the database path at it. Without a persistent disk, `data/db.json` is lost on every deploy.
+
+`render.yaml` is included as an optional blueprint for the same setup.
+
+---
+
+## Bot Usage
+
+### Private chat
+
+| Command | Description |
+|---|---|
+| `/start` | Entry point; runs the force-join check and opens the main menu |
+| `/ref` | Returns the user's personal invite link and invite count |
+
+### Admin
+
+| Command | Description |
+|---|---|
+| `/stats` | Usage and growth statistics |
+| `/broadcast` | Send a message to all known users |
+| `/ban` | Ban a user |
+| `/unban` | Remove a ban |
+| `/getid` | Look up a user or chat ID |
+| `/setid` | Set a configured chat ID |
+| `/diag` | Diagnostics for the force-join gate and webhook status |
+
+Admin commands are restricted to the configured administrator IDs.
+
+---
+
+## Force-Join Gate
+
+The gate is checked on every user interaction, in both private chats and groups.
+
+- `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt.
+- `MIN_JOINS_REQUIRED` sets how many of the listed chats must be joined before access is granted.
+- `JOIN_FAIL_MODE` defines what happens when the membership check can't be completed — for example, when the bot lacks permission to query membership or the Telegram API is unreachable. Two common modes are to fail open (allow access) or fail closed (deny access).
+- `/diag` reports the current state of the gate so misconfiguration can be spotted quickly.
+- `/getid` and `/setid` are used to discover and correct chat IDs used by the gate.
+
+Adding the bot to a group does not bypass the gate. Group members are subject to the same check as private users.
+
+---
+
+## Notes and Limits
+
+- **No auto-add.** The bot does not add users to any chat. Users join through the links configured in `LINK_BLOCKS`.
+- **Broadcast is opt-in for recipients.** Only users known to the bot receive broadcasts. Unknown users are never messaged.
+- **Data is local.** All state lives in `data/db.json`. The file is created on first run and is not part of the repository.
+- **Persistent storage is required in production.** On ephemeral filesystems, attach a persistent disk and point the database path at it.
+- **The webhook URL must be public.** The bot will not function correctly behind a URL that Telegram cannot reach.
 
 ---
 
 ## Troubleshooting
 
-| Problem | Fix |
-|---|---|
-| `.gitignore` / `render.yaml` missing on GitHub | Hidden dotfiles — push with `git add -A`, not the website upload |
-| `.env` got uploaded | Delete it and **rotate the token/key immediately** |
-| `Updates were rejected...` | `git pull origin main --allow-unrelated-histories`, then push |
-| `Conflict: terminated by other getUpdates` | More than one instance running — keep one service on Render |
-| Gate always shows "join" | Bot is not admin in that chat, or the ID is wrong — check with `/getid` |
-| AI not replying | `AI_API_KEY` invalid/expired or model ID wrong — check logs |
-| Welcome photo missing | `welcome.png` missing — check the path in `config.py` |
-| Bot sleeps | Set up the keep-alive ping (use the `/health` URL) |
+| Symptom | Likely cause | Resolution |
+|---|---|---|
+| Bot does not respond at all | Webhook URL not set or unreachable | Set the Render service URL as the webhook and verify it is public |
+| Users pass the gate without joining | Bot lacks permission to check membership | Grant the bot the required permissions in each configured chat, then run `/diag` |
+| Users are always blocked | `MIN_JOINS_REQUIRED` higher than the number of configured chats | Lower the value or add the missing chat IDs |
+| Join buttons show wrong chats | `LINK_BLOCKS` or chat IDs are incorrect | Re-check IDs with `/getid` and update `config.py` |
+| Data resets after deploy | Ephemeral filesystem | Attach a persistent disk and set the database path to it |
+| Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |
+
+---
+
+## Author
+
+Deepak Devs
+
+- GitHub: https://github.com/DeepakDevss
+- X: https://x.com/Deepak_Devs
+- Reddit: https://www.reddit.com/u/Deepak_Devs
+
+---
+
+## License
+
+There's no license file yet. Add one before you distribute or publicly modify this project.
