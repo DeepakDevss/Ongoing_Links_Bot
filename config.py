@@ -86,6 +86,7 @@ ADMIN_IDS = [
 LINK_BLOCKS = [
     {
         "name": "AI",
+        "emoji": "🤖",
         "url": "https://t.me/Linnet_Agents_Bot",
         "id": None,
         "require_join": False,
@@ -93,6 +94,7 @@ LINK_BLOCKS = [
     },
     {
         "name": "ANIME WORLD HINDI",
+        "emoji": "🎬",
         "url": "https://t.me/+eF2CEXI452o4ZjBl",
         "id": None,
         "require_join": True,
@@ -100,6 +102,7 @@ LINK_BLOCKS = [
     },
     {
         "name": "ANIME UNIVERES HINDI",
+        "emoji": "🌸",
         "url": "https://t.me/+edJ4U_obJBgzOWE1",
         "id": None,
         "require_join": True,
@@ -107,6 +110,7 @@ LINK_BLOCKS = [
     },
     {
         "name": "HOYOVERSE ANIMES",
+        "emoji": "⚔️",
         "url": "https://t.me/+UyqJ5I4HW-FlMjc1",
         "id": None,
         "require_join": True,
@@ -114,6 +118,7 @@ LINK_BLOCKS = [
     },
     {
         "name": "ANIME WORLD NEWS",
+        "emoji": "📰",
         "url": "https://t.me/+AnUG7H4xllZmMGI1",
         "id": None,
         "require_join": True,
@@ -140,6 +145,15 @@ MEMBERSHIP_CACHE_TTL = int(os.getenv("MEMBERSHIP_CACHE_TTL", "60"))
 #   "all" -> saare required blocks
 #   "1"   -> sirf 1
 MIN_JOINS_REQUIRED = os.getenv("MIN_JOINS_REQUIRED", "2")
+
+# Force-join gate par jo message dikhta hai (links ke upar).
+GATE_MESSAGE = os.getenv("GATE_MESSAGE", (
+    "ʜᴇʟʟᴏ ᴛʜᴇʀᴇ..!⚡️\n\n"
+    "🫧ᴘʟᴇᴀsᴇ ᴊᴏɪɴ ᴏғ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ғɪʀsᴛ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ᴛʀʏ ᴀɢᴀɪɴ...!"
+))
+
+# Gate ka verify button ka label.
+GATE_BUTTON_TEXT = os.getenv("GATE_BUTTON_TEXT", "✅ ᴛʀʏ ᴀɢᴀɪɴ")
 
 
 # ---------------------------------------------------------------------

@@ -71,6 +71,8 @@ from config import (
     DB_PATH,
     MEMBERSHIP_CACHE_TTL,
     MIN_JOINS_REQUIRED,
+    GATE_MESSAGE,
+    GATE_BUTTON_TEXT,
     AI_API_KEY,
     AI_MODEL,
     AI_MODEL_LITE,
@@ -355,15 +357,23 @@ async def _is_member(context, chat_id, user_id, force=False) -> bool:
 
 
 def required_count() -> int:
-    """Kitne enforced blocks join karna zaroori hai (config: MIN_JOINS_REQUIRED)."""
+    """Kitne VERIFIABLE blocks join karna zaroori hai.
+    Agar koi block verifiable nahi (numeric IDs missing) to 0."""
     total = len(enforced_blocks())
+    if total == 0:
+        return 0
     val = str(MIN_JOINS_REQUIRED).strip().lower()
     if val == "all":
         return total
     try:
-        return max(1, min(int(val), total)) if total else 0
+        return max(1, min(int(val), total))
     except ValueError:
         return total
+
+
+def has_required_blocks() -> bool:
+    """config me koi bhi require_join block hai?"""
+    return any(b.get("require_join") for b in LINK_BLOCKS)
 
 
 async def join_status(context, user_id, force=False):
@@ -379,8 +389,14 @@ async def join_status(context, user_id, force=False):
 
 
 async def needs_join(context, user_id, force=False) -> bool:
-    """User ko gate dikhana hai? (kam se kam 'need' blocks join kiye ya nahi)"""
+    """User ko gate dikhana hai?"""
+    if not has_required_blocks():
+        return False
     joined, _missing, need = await join_status(context, user_id, force=force)
+    if need <= 0:
+        # Koi verifiable block nahi (numeric IDs config me nahi hain) ->
+        # gate dikhta hai par verify nahi ho sakta (admin ko IDs daalni hongi).
+        return True
     return len(joined) < need
 
 
@@ -395,7 +411,8 @@ def link_keyboard(extra_rows=None):
         if r not in by_row:
             by_row[r] = []
             order.append(r)
-        by_row[r].append(InlineKeyboardButton(fonts.bold(b["name"]), url=b["url"]))
+        label = f"{b['emoji']} {fonts.bold(b['name'])}" if b.get("emoji") else fonts.bold(b["name"])
+        by_row[r].append(InlineKeyboardButton(label, url=b["url"]))
     for r in order:
         rows.append(by_row[r])
     if extra_rows:
@@ -419,16 +436,9 @@ def build_welcome(member, chat_title: str) -> str:
 
 
 async def send_join_gate(update: Update, context, edit=False):
-    need = required_count()
-    total = len(enforced_blocks())
-    ask = "all of the channels below" if need >= total else f"any {need} of the channels below"
-    text = (
-        f"{fonts.small_caps('Hold on a moment')}\n\n"
-        f"To use me, please join {ask} first.\n\n"
-        f"After joining, tap {fonts.bold('Check')}."
-    )
+    text = GATE_MESSAGE
     kb = link_keyboard(extra_rows=[
-        [InlineKeyboardButton("Check", callback_data="check_join")],
+        [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
     ])
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb)
@@ -621,13 +631,19 @@ async def cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fwd = getattr(msg, "forward_from_chat", None)
     if fwd:
         await msg.reply_text(
-            f"Chat: {fwd.title}\nID: {fwd.id}\nType: {fwd.type}\n\n"
-            "Is id ko config.py ke LINK_BLOCKS mein daal do."
+            f"Chat: {fwd.title}\n"
+            f"Numeric id: {fwd.id}\n"
+            f"Type: {fwd.type}\n\n"
+            "config.py -> LINK_BLOCKS -> us block ke \"id\" me ye number daal do.\n"
+            "(Bot us chat me admin hona chahiye.)"
         )
     else:
         await msg.reply_text(
-            "Forward a message from that channel/group here, and I'll give its ID.\n"
-            "(The bot must be an admin in that chat.)"
+            "Us channel/group ka koi message yahan forward karo, main numeric id "
+            "bata dunga.\n"
+            "Ye id LINK_BLOCKS ke \"id\" me daalni hoti hai — tabhi force-join "
+            "verify hota hai.\n"
+            "(Bot us chat me admin hona chahiye.)"
         )
 
 
@@ -644,10 +660,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Strict: cache ignore karke fresh check — join karke turant chhod diya
         # ho, ya cache purana ho, to bhi pakda jaye.
         joined, missing, need = await join_status(context, user.id, force=True)
-        if len(joined) < need:
+        if need > 0 and len(joined) < need:
             await q.answer(
                 f"Abhi {len(joined)}/{need} join hua hai. "
-                f"Kam se kam {need} channel join karo, phir Check dabao.",
+                f"Kam se kam {need} channel join karo, phir try again karo.",
                 show_alert=True,
             )
         else:
@@ -687,15 +703,33 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================================
 #  AUTO-APPROVE JOIN REQUESTS
 # =====================================================================
+_id_told: set = set()
+
+
 async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not AUTO_APPROVE_JOIN_REQUESTS:
-        return
     req = update.chat_join_request
-    try:
-        await req.approve()
-        log.info("Approved join request from %s in %s", req.from_user.id, req.chat.id)
-    except Exception as e:
-        log.warning("Approve fail: %s", e)
+    if AUTO_APPROVE_JOIN_REQUESTS:
+        try:
+            await req.approve()
+        except Exception as e:
+            log.warning("Approve fail: %s", e)
+    # Yahan se channel/group ki ASLI numeric id milti hai (invite link se
+    # nahi milti). Admin ko bhej do taaki config.py me daal sake.
+    chat = req.chat
+    log.info("Join request in %s (id=%s) from %s", chat.title, chat.id, req.from_user.id)
+    if chat.id not in _id_told:
+        _id_told.add(chat.id)
+        for admin in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    admin,
+                    "Naya join request aaya — is chat ki numeric id ye hai:\n\n"
+                    f"{chat.title}  ->  id: {chat.id}\n\n"
+                    "config.py -> LINK_BLOCKS -> us block ke \"id\" me ye number "
+                    "daal do, tabhi force-join verify hoga.",
+                )
+            except Exception:
+                pass
 
 
 # =====================================================================
