@@ -209,6 +209,18 @@ The gate is checked on every user interaction, in both private chats and groups.
 - `/diag` reports the current state of the gate so misconfiguration can be spotted quickly.
 - `/getid` and `/setid` are used to discover and correct chat IDs used by the gate.
 
+### How the bot learns a chat's ID
+
+Telegram has no API to list the chats a bot is in, so the bot learns each chat's ID from events:
+
+- **Added or re-promoted as admin** — the bot learns the ID instantly (`my_chat_member`). This is silent; nobody sees a message.
+- **Any channel post** — the bot receives it and learns the chat.
+- **Any group message** (text, photo, sticker, command) — the bot learns the chat.
+- **Someone joins the group** — a service message the bot always receives.
+- **A join request** — the bot learns the chat ID.
+
+The bot does **not** receive its own outgoing messages, so it cannot post its way into a chat it has no ID for. To make the bot learn a chat it has been in since before this feature existed: send any message there, or re-promote the bot. `/chats` lists every chat the bot knows, with its live status.
+
 Adding the bot to a group does not bypass the gate. Group members are subject to the same check as private users.
 
 ---

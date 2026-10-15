@@ -980,17 +980,24 @@ async def _known_chats_lines(context, me) -> list:
     """Bot jin chats me hai unki LIVE list (id, title, type, bot ka status,
     aur kaunse block se juda hai)."""
     known = db_get_chats()
+    sc, bd = fonts.small_caps, fonts.bold
+    out = [_SEP, f"{bd('CHATS BOT IS IN')} ({len(known)})", _SEP]
     if not known:
-        return []
+        out.append(f"{sc('abhi koi chat record nahi hui')}.")
+        out.append("")
+        out.append(f"{sc('kaise bhare')}:")
+        out.append("  • us group me koi message bhejo (bot admin hai to milega)")
+        out.append("  • channel me koi post karo")
+        out.append("  • ya bot ko dobara admin banao — turant pakad lega")
+        out.append("")
+        return out
     learned = _learned_ids()
     bound = {}
     for blk in LINK_BLOCKS:
         c = blk.get("id") or learned.get(blk["name"])
         if c:
             bound[int(c)] = blk["name"]
-    sc, bd = fonts.small_caps, fonts.bold
     items = sorted(known.items(), key=lambda kv: kv[1].get("title", "").lower())
-    out = [_SEP, f"{bd('CHATS BOT IS IN')} ({len(known)})", _SEP]
     for _k, c in items[:15]:
         cid = c.get("id")
         try:
@@ -1014,12 +1021,6 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     me = await _get_me(context)
     lines = await _known_chats_lines(context, me)
-    if not lines:
-        await update.effective_message.reply_text(
-            "Abhi koi chat yaad nahi hai.\n\nBot ko kisi group/channel me add karo, "
-            "ya us chat me koi message bhejo — phir ye list khud bhar jayegi."
-        )
-        return
     await update.effective_message.reply_text("\n".join(lines).strip())
 
 
@@ -1193,6 +1194,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #  WELCOME  (naye member par)
 # =====================================================================
 async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Service message = bot ko HAMESHA milti hai (chahe privacy on ho). Isliye
+    # jab bhi koi group me join kare, hum us group ki id seekh lete hain.
+    learn_chat(update)
     msg = update.effective_message
     if not msg or not msg.new_chat_members:
         return
@@ -1306,6 +1310,11 @@ def _strip_mention(text: str, username: str) -> str:
 
 # chat_id -> last DB write time (har message par DB write na ho)
 _chat_seen: dict = {}
+
+
+async def _learn_only(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sirf chat yaad rakho, kuch reply na karo (group 1 ka catch-all)."""
+    learn_chat(update)
 
 
 def learn_chat(update, status=None, force=False):
@@ -1434,6 +1443,11 @@ def build_application() -> Application:
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, on_group_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, on_private_message))
+
+    # Group 1: jo bhi group update group 0 me handle na ho (photo, sticker,
+    # command, koi bhi cheez) — sirf chat yaad rakhne ke liye. Isse bot ko
+    # us group ka pata chal jata hai, chahe koi bhi tarah ka message aaye.
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS, _learn_only), group=1)
 
     app.add_error_handler(on_error)
     return app
