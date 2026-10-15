@@ -77,6 +77,7 @@ from config import (
     OWNER_NAME,
     GATE_MESSAGE,
     GATE_BUTTON_TEXT,
+    JOIN_PROMPT,
     AI_API_KEY,
     AI_MODEL,
     AI_MODEL_LITE,
@@ -857,12 +858,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     show_alert=True,
                 )
             else:
-                names = ", ".join(b["name"] for b in missing)
-                await q.answer(
-                    f"Abhi {len(joined)}/{need} join hua hai.\n"
-                    f"Ye join karo: {names}\n\n"
-                    "Join karke phir neeche wala button dabao.",
-                    show_alert=True,
+                # Bina join kiye Check dabaya -> naya message: caption + links + Check.
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=JOIN_PROMPT,
+                    reply_markup=link_keyboard(extra_rows=[
+                        [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
+                    ]),
                 )
         else:
             # Verify ho gaya — gate message hata do, koi doosra menu/message nahi.
