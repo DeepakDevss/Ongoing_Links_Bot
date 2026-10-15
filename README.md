@@ -20,7 +20,7 @@ The force-join check runs in both private and group chats, so adding the bot to 
 - **Force-join gate** — Users must join the configured channels before the bot will respond. Applies in private chats and in groups.
 - **Owner approval of join requests** — Each incoming join request is sent to the owner with the requester's details and an Approve button. Nothing is auto-approved.
 - **Welcome message** — New members get a photo caption welcome.
-- **AI chat** — Every private message gets an AI reply. In groups, the bot replies only when mentioned or replied to.
+- **AI chat** — Every private message gets an AI reply. In groups, the bot replies only when @mentioned.
 - **Referral system** — Each user gets a personal invite link. Invite counts are tracked and shown through `/ref`.
 - **Admin controls** — Broadcast, ban, unban, member lookup, ID management, and diagnostics for configured admins.
 - **Webhook deployment** — Runs behind FastAPI on Render. No polling loop.
@@ -142,7 +142,18 @@ All settings live in `config.py`. The important ones are grouped below.
 | Setting | Purpose |
 |---|---|
 | Welcome image and caption | Message sent to new members |
-| Referral reward rules | Conditions under which invite counts increase |
+
+Other settings you may want (all optional, defaults are set in `config.py`):
+
+| Setting | Purpose |
+|---|---|
+| `OWNER_ID` / `OWNER_NAME` | Bot owner; skips the gate and receives join requests |
+| `NOTIFY_OWNER` | `True` = send DM notifications to the owner (default `False`) |
+| `GATE_MESSAGE` / `GATE_BUTTON_TEXT` / `JOIN_PROMPT` | Gate text, button label, and the "join first" prompt |
+| `AI_MODEL` / `AI_MODEL_LITE` / `AI_THINKING_LEVEL` | AI model IDs and thinking level |
+| `AI_BUSY_MESSAGE` | Message shown when the AI is overloaded |
+| `MEMBERSHIP_CACHE_TTL` | Seconds a membership result is cached |
+| `WEBHOOK_SECRET` | Optional; otherwise a random secret is generated per boot |
 
 Refer to `config.py` for the exact variable names, accepted values, and inline comments.
 
@@ -155,8 +166,8 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 3. Set the build command to `pip install -r requirements.txt`.
 4. Set the start command to `python bot.py`.
 5. Add the environment variables from your local `.env` in the Render dashboard.
-6. Set the public URL of the service as the webhook URL used by the bot.
-7. Attach a persistent disk and point the database path at it. Without a persistent disk, `data/db.json` is lost on every deploy.
+6. The bot registers its own webhook from Render's service URL (`RENDER_EXTERNAL_URL`). Do **not** set `WEBHOOK_URL` yourself.
+7. `data/db.json` lives on the local filesystem. Persistent disks need a paid Render plan; on the free tier the file is lost on every deploy.
 
 `render.yaml` is included as an optional blueprint for the same setup.
 
@@ -168,7 +179,7 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 
 | Command | Description |
 |---|---|
-| `/start` | Entry point; runs the force-join check and opens the main menu |
+| `/start` | Entry point; runs the force-join check, then you can just type |
 | `/ref` | Returns the user's personal invite link and invite count |
 
 ### Admin
@@ -181,7 +192,7 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 | `/unban` | Remove a ban |
 | `/getid` | Look up a user or chat ID |
 | `/setid` | Set a configured chat ID |
-| `/diag` | Diagnostics for the force-join gate and webhook status |
+| `/diag` | Diagnostics for the force-join gate |
 
 Admin commands are restricted to the configured administrator IDs.
 

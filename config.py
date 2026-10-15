@@ -156,7 +156,7 @@ LINK_BLOCKS = [
 JOIN_FAIL_MODE = os.getenv("JOIN_FAIL_MODE", "closed").lower()
 
 # Membership check cache (seconds) — getChatMember API calls kam karne ke liye
-MEMBERSHIP_CACHE_TTL = int(os.getenv("MEMBERSHIP_CACHE_TTL", "60"))
+MEMBERSHIP_CACHE_TTL = _int_env("MEMBERSHIP_CACHE_TTL", 60)
 
 # Kitne required blocks join karna ZAROORI hai (force-join gate ke liye).
 #   "2"   -> kam se kam 2 (jo bhi 2)   <-- default
@@ -205,10 +205,11 @@ WELCOME_IMAGE = os.getenv(
 # #7  WEBHOOK / PORT / DB  (Render khud set karta hai — chhedne ki zaroorat nahi)
 # ---------------------------------------------------------------------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "") or os.getenv("RENDER_EXTERNAL_URL", "")
-PORT = int(os.getenv("PORT", "10000"))
+PORT = _int_env("PORT", 10000)
 
-# Webhook ka secret path. Khaali chhodo to BOT_TOKEN se apne aap ban jaata hai.
-# Isse bot token seedha URL me NAHI aata — Render logs / screenshots se leak nahi hota.
+# Webhook ka secret path. Khaali chhodo to bot khud ek RANDOM secret bana leta
+# hai (BOT_TOKEN se derive NAHI hota — warna token leak hone par webhook bhi
+# forge ho sakta tha). Isse bot token seedha URL me aata hi nahi.
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 DB_PATH = os.getenv("DB_PATH", "data/db.json")
 
@@ -262,7 +263,7 @@ _DEFAULT_SYSTEM_PROMPT = (
 AI_SYSTEM_PROMPT = os.getenv("AI_SYSTEM_PROMPT", _DEFAULT_SYSTEM_PROMPT)
 
 # AI reply ki max length per message (Telegram limit ~4096)
-AI_MAX_CHARS = int(os.getenv("AI_MAX_CHARS", "3800"))
+AI_MAX_CHARS = _int_env("AI_MAX_CHARS", 3800)
 
 # Latency: Gemini 3 Flash default "medium" thinking par chalta hai — slow.
 # "minimal" = sabse fast. Values: minimal | low | medium | high | "" (off)

@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import random
+import re
 import secrets
 import threading
 import time
@@ -173,10 +174,12 @@ def db_set_chat_id(name, chat_id):
 _seen_cache: dict[int, float] = {}
 
 
-def db_add_user(user):
+def db_add_user(user, bump_start=False):
     """Naya user ho to True return karega.
-    Har message par disk write na ho — 5 min tak skip karte hain (speed)."""
-    if time.time() - _seen_cache.get(user.id, 0) < 300:
+    bump_start=True (/start) -> 'Total started' bhi badhao, USI ek write me
+    (pehle alag db_count_start() doosra read+write karta tha — ab ek hi).
+    Normal messages par 5 min tak write skip hoti hai (speed)."""
+    if not bump_start and time.time() - _seen_cache.get(user.id, 0) < 300:
         return False
     _seen_cache[user.id] = time.time()
     _prune(_seen_cache, 10000)
@@ -194,17 +197,10 @@ def db_add_user(user):
         if is_new:
             entry["joined_at"] = _now()
         data["users"][uid] = entry
+        if bump_start:
+            data["stats"]["total_started"] = data["stats"].get("total_started", 0) + 1
         _db_save(data)
         return is_new
-
-
-def db_count_start():
-    """Har /start par ginti — 'Total started' asli /start count ho
-    (pehle sirf naye user par badhta tha, isliye metric galat tha)."""
-    with _db_lock:
-        data = _db_load()
-        data["stats"]["total_started"] = data["stats"].get("total_started", 0) + 1
-        _db_save(data)
 
 
 def db_user_exists(uid) -> bool:
@@ -393,7 +389,7 @@ async def ask_ai(prompt: str, lite: bool = False, where: str = "", mem_key=None,
     """Prompt bhejo, reply lo. lite=True se sasta/fast model use hoga.
     where   = context line (group ka naam ya 'a private chat').
     note    = extra context (jaise 'this user is the owner').
-    chat_id = iske hisaab se thodi conversation memory rakhi jaati hai."""
+    mem_key = iske hisaab se thodi conversation memory rakhi jaati hai."""
     raw = prompt
     bits = []
     if where:
@@ -687,7 +683,11 @@ async def send_join_gate(update: Update, context, edit=False):
 async def verify_blocks_on_startup(app: Application):
     """Start par check: har enforced chat ki id hai? bot admin hai?
     Jo problem mile wo admin ko DM bhi bhejo — sirf log me chhodo mat."""
-    me = await app.bot.get_me()
+    try:
+        me = await app.bot.get_me()
+    except Exception as e:
+        log.warning("Startup check skip — get_me fail: %s", e)
+        return
     learned = _learned_ids()
     problems = []
     for b in LINK_BLOCKS:
@@ -721,8 +721,7 @@ async def verify_blocks_on_startup(app: Application):
 # =====================================================================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    db_add_user(user)
-    db_count_start()
+    db_add_user(user, bump_start=True)
 
     if db_is_banned(user.id):
         await update.effective_message.reply_text("You have been blocked from using this bot.")
@@ -1045,7 +1044,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Join-request ka Approve button (sirf owner/admin dabaa sakta hai)
     if data.startswith("jr_ok:"):
-        if not is_admin(user.id):
+        # Sirf OWNER approve kar sakta hai (OWNER_ID khaali ho to ADMIN_IDS[0]).
+        if user.id != (OWNER_ID or (ADMIN_IDS[0] if ADMIN_IDS else 0)):
             await q.answer("Sirf owner ye kar sakta hai.", show_alert=True)
             return
         try:
@@ -1226,11 +1226,10 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #  AI CHAT
 # =====================================================================
 def _strip_mention(text: str, username: str) -> str:
-    if not text:
-        return ""
-    for token in (f"@{username}", f"@{username.lower()}"):
-        text = text.replace(token, " ")
-    return text.strip()
+    """Mention hata do — case ki parwah nahi (@Bot, @BOT, @bot sab)."""
+    if not text or not username:
+        return (text or "").strip()
+    return re.sub(rf"@{re.escape(username)}", " ", text, flags=re.IGNORECASE).strip()
 
 
 async def learn_chat_id(update: Update, context):
