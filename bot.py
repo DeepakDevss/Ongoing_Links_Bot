@@ -49,6 +49,7 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     ChatJoinRequestHandler,
+    ChatMemberHandler,
     ContextTypes,
     filters,
 )
@@ -192,12 +193,20 @@ def db_all_users():
         return list(_db_load()["users"].values())
 
 
+_ban_cache = None
+
+
 def db_is_banned(uid):
-    with _db_lock:
-        return int(uid) in _db_load()["banned"]
+    """In-memory cache — har message par file read na ho (bottleneck fix)."""
+    global _ban_cache
+    if _ban_cache is None:
+        with _db_lock:
+            _ban_cache = set(_db_load()["banned"])
+    return int(uid) in _ban_cache
 
 
 def db_set_ban(uid, value=True):
+    global _ban_cache
     with _db_lock:
         data = _db_load()
         uid = int(uid)
@@ -206,6 +215,7 @@ def db_set_ban(uid, value=True):
         if not value and uid in data["banned"]:
             data["banned"].remove(uid)
         _db_save(data)
+        _ban_cache = set(data["banned"])
 
 
 def db_add_referral(referrer_id, new_user_id):
@@ -453,6 +463,16 @@ def enforced_blocks():
 # chhota membership cache: getChatMember API calls kam karne ke liye
 _member_cache: dict[tuple[int, int], tuple[bool, float]] = {}
 
+# Check button ka anti-spam cooldown (user_id -> last time)
+_check_cd: dict = {}
+
+
+def _prune(cache: dict, keep: int):
+    """Cache ko bounded rakho — memory leak se bachne ke liye."""
+    if len(cache) > keep:
+        for k in list(cache.keys())[: len(cache) - keep]:
+            cache.pop(k, None)
+
 # bot ka apna info — har group message par get_me() API call na ho (speed)
 _bot_me = None
 
@@ -482,6 +502,7 @@ async def _is_member(context, chat_id, user_id, force=False):
         _member_cache[key] = (result, now)
         return result
     _member_cache[key] = (ok, now)
+    _prune(_member_cache, 5000)
     return ok
 
 
@@ -590,27 +611,39 @@ async def send_join_gate(update: Update, context, edit=False):
 
 
 async def verify_blocks_on_startup(app: Application):
-    """Start par check karo ki bot har enforced chat mein admin hai."""
+    """Start par check: har enforced chat ki id hai? bot admin hai?
+    Jo problem mile wo admin ko DM bhi bhejo — sirf log me chhodo mat."""
     me = await app.bot.get_me()
     learned = _learned_ids()
+    problems = []
     for b in LINK_BLOCKS:
         if not b.get("require_join"):
             continue
         cid = b.get("id") or learned.get(b["name"])
         if not cid:
-            log.warning(
-                "Block '%s' ki numeric id nahi hai — force-join verify NAHI hoga. "
-                "Bot ko us chat me admin banao, phir /getid (message forward) ya "
-                "/setid <name> <id> use karo.",
-                b["name"],
-            )
+            log.warning("Block '%s' ki numeric id nahi hai — verify nahi hoga.", b["name"])
+            problems.append(f"• {b['name']}: ID nahi hai")
             continue
         try:
             member = await app.bot.get_chat_member(chat_id=cid, user_id=me.id)
             if member.status not in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
-                log.warning("Bot '%s' mein ADMIN nahi hai — gate enforce nahi hoga.", b["name"])
+                log.warning("Bot '%s' mein ADMIN nahi hai.", b["name"])
+                problems.append(f"• {b['name']}: bot admin nahi hai")
         except Exception as e:
             log.warning("Block '%s' verify fail (id=%s): %s", b["name"], cid, e)
+            problems.append(f"• {b['name']}: check fail ({type(e).__name__})")
+    if problems:
+        text = (
+            "⚠️ Force-join gate abhi poori tarah kaam nahi karega:\n\n"
+            + "\n".join(problems)
+            + "\n\nFix: bot ko us channel/group me ADMIN banao. Bot add karte hi "
+            "mujhe chat id khud mil jayegi. Ya /getid (message forward) / /setid."
+        )
+        for admin in ADMIN_IDS:
+            try:
+                await app.bot.send_message(admin, text)
+            except Exception:
+                pass
 
 
 # =====================================================================
@@ -877,6 +910,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         return
 
+    # Anti-spam: ek user 2 second me sirf ek baar check kar sakta hai
+    # (warna Check dabate rehne se getChatMember flood ho jayega).
+    now = time.time()
+    if now - _check_cd.get(user.id, 0) < 2:
+        await q.answer("Thoda ruko, phir try karo.")
+        return
+    _check_cd[user.id] = now
+    _prune(_check_cd, 5000)
+
     # Strict: cache ignore karke fresh check — join karke turant chhod diya
     # ho, ya cache purana ho, to bhi pakda jaye.
     joined, missing, unknown, need = await join_status(context, user.id, force=True)
@@ -884,9 +926,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if need > 0 and len(joined) < need:
         # Bina join kiye Check dabaya -> naya message: caption + links + Check.
         await q.answer()
+        text = JOIN_PROMPT
+        if missing:
+            text += "\n\n" + ", ".join(b["name"] for b in missing)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=JOIN_PROMPT,
+            text=text,
             reply_markup=link_keyboard(extra_rows=[
                 [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
             ]),
@@ -980,6 +1025,41 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception:
                 pass
+
+
+async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bot ko jab kisi channel/group me add ya admin banaya jaye -> Telegram
+    turant us chat ki id + title bhejta hai. Yahi sabse aasan tareeka hai."""
+    cm = update.my_chat_member
+    if not cm or not cm.chat:
+        return
+    chat = cm.chat
+    status = getattr(cm.new_chat_member, "status", "")
+    log.info("my_chat_member: %s (id=%s) status=%s", chat.title, chat.id, status)
+    if status in (ChatMember.LEFT, ChatMember.BANNED):
+        return  # bot nikaal diya gaya
+
+    is_admin_now = status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER)
+    b = match_block_by_title(chat.title) if chat.title else None
+    lines = [
+        f"Chat: {chat.title}",
+        f"ID: {chat.id}",
+        f"Bot status: {status}",
+    ]
+    if b:
+        db_set_chat_id(b["name"], chat.id)
+        lines.append(f"Block match: {b['name']} — id SAVE ho gayi")
+    else:
+        lines.append(
+            "Ye title kisi block se match nahi hua — /setid <block name> <id> se daalo."
+        )
+    if not is_admin_now:
+        lines.append("⚠️ Bot ADMIN nahi hai — is chat ka verify kaam nahi karega.")
+    for admin in ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin, "\n".join(lines))
+        except Exception:
+            pass
 
 
 # =====================================================================
@@ -1102,6 +1182,7 @@ def build_application() -> Application:
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
+    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, on_chat_seen))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, on_group_message))
