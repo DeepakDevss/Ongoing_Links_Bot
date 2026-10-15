@@ -76,6 +76,7 @@ from config import (
     MIN_JOINS_REQUIRED,
     OWNER_ID,
     OWNER_NAME,
+    NOTIFY_OWNER,
     GATE_MESSAGE,
     GATE_BUTTON_TEXT,
     JOIN_PROMPT,
@@ -425,6 +426,21 @@ def _owner_note(uid) -> str:
     return ""
 
 
+async def _notify_owner(bot, text):
+    """Owner ko DM — SIRF jab NOTIFY_OWNER on ho. Warna sirf log (spam nahi).
+    Sab jaankari /diag se kabhi bhi mil jaati hai."""
+    log.info("NOTIFY: %s", text.replace("\n", " | "))
+    if not NOTIFY_OWNER:
+        return
+    target = OWNER_ID or (ADMIN_IDS[0] if ADMIN_IDS else 0)
+    if not target:
+        return
+    try:
+        await bot.send_message(target, text)
+    except Exception:
+        pass
+
+
 def _norm(s) -> str:
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
@@ -549,6 +565,9 @@ async def join_status(context, user_id, force=False):
 # jin users ne gate ek baar paar kar liya (jab verify possible hi nahi hai)
 _passed: set = set()
 
+# chat_id -> bot ka last dekha status (duplicate notification rokne ke liye)
+_chat_status: dict = {}
+
 
 async def needs_join(context, user_id, force=False) -> bool:
     """User ko gate dikhana hai? Owner/admin ko nahi."""
@@ -639,11 +658,7 @@ async def verify_blocks_on_startup(app: Application):
             + "\n\nFix: bot ko us channel/group me ADMIN banao. Bot add karte hi "
             "mujhe chat id khud mil jayegi. Ya /getid (message forward) / /setid."
         )
-        for admin in ADMIN_IDS:
-            try:
-                await app.bot.send_message(admin, text)
-            except Exception:
-                pass
+        await _notify_owner(app.bot, text)
 
 
 # =====================================================================
@@ -851,30 +866,52 @@ async def cmd_setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+_RIGHTS = (
+    "can_invite_users", "can_delete_messages", "can_restrict_members",
+    "can_pin_messages", "can_manage_chat", "can_post_messages", "can_edit_messages",
+    "can_promote_members",
+)
+
+
 async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: har block ka status — id hai? bot admin hai? verify hoga?"""
+    """Admin: har block ka poora status — id, bot ka role, uske permissions,
+    aur tum khud us chat me join ho ya nahi."""
     if not is_admin(update.effective_user.id):
         return
     me = await _get_me(context)
     learned = _learned_ids()
-    lines = []
+    uid = update.effective_user.id
+    out = ["BOT STATUS", ""]
     for b in LINK_BLOCKS:
+        out.append(f"{b['name']}")
         if not b.get("require_join"):
-            lines.append(f"{b['name']}: link-only (check nahi hota)")
+            out.append("   link-only (check nahi hota)")
             continue
         cid = b.get("id") or learned.get(b["name"])
         if not cid:
-            lines.append(f"{b['name']}: ID nahi hai — check nahi hoga")
+            out.append("   id: NAHI MILI  (/getid ya /setid se daalo)")
             continue
+        out.append(f"   id: {cid}")
         try:
-            m = await context.bot.get_chat_member(chat_id=cid, user_id=me.id)
-            ok = m.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER)
-            lines.append(f"{b['name']}: id={cid} | bot admin: {'haan' if ok else 'NAHI'}")
+            bm = await context.bot.get_chat_member(chat_id=cid, user_id=me.id)
+            out.append(f"   bot: {bm.status}")
+            if bm.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+                on = [r.replace("can_", "") for r in _RIGHTS if getattr(bm, r, None)]
+                off = [r.replace("can_", "") for r in _RIGHTS if not getattr(bm, r, None)]
+                out.append(f"   ON : {', '.join(on) if on else 'none'}")
+                out.append(f"   OFF: {', '.join(off) if off else 'none'}")
+            else:
+                out.append("   ⚠️ bot ADMIN nahi — verify nahi hoga")
         except Exception as e:
-            lines.append(f"{b['name']}: id={cid} | check FAIL ({type(e).__name__})")
-    await update.effective_message.reply_text(
-        "Diagnostics\n\n" + "\n".join(lines) + f"\n\nRequired joins: {required_count()}"
-    )
+            out.append(f"   ⚠️ bot check FAIL: {type(e).__name__}")
+        try:
+            um = await context.bot.get_chat_member(chat_id=cid, user_id=uid)
+            out.append(f"   aap joined: {'haan' if um.status not in NOT_MEMBER_STATUSES else 'nahi'}")
+        except Exception:
+            out.append("   aap joined: pata nahi")
+    out.append("")
+    out.append(f"Required joins: {required_count()}  |  Gate: {JOIN_FAIL_MODE}")
+    await update.effective_message.reply_text("\n".join(out))
 
 
 # =====================================================================
@@ -895,11 +932,7 @@ async def _warn_admin_unverifiable(context, blocks):
         + "\n".join(f"- {n}" for n in names)
         + "\n\nBot ko wahan admin banao, tabhi force-join lagega."
     )
-    for admin in ADMIN_IDS:
-        try:
-            await context.bot.send_message(admin, text)
-        except Exception:
-            pass
+    await _notify_owner(context.bot, text)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -986,9 +1019,6 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================================
 #  AUTO-APPROVE JOIN REQUESTS
 # =====================================================================
-_id_told: set = set()
-
-
 async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     req = update.chat_join_request
     approved = False
@@ -998,11 +1028,13 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             approved = True
         except Exception as e:
             log.warning("Approve fail: %s", e)
-    # Yahan se channel/group ki ASLI numeric id milti hai (invite link se
-    # nahi milti). Admin ko bhej do taaki config.py me daal sake.
     chat = req.chat
     log.info("Join request in %s (id=%s) from %s", chat.title, chat.id, req.from_user.id)
-    # User ko batao ki approve ho gaya — ab wo gate par button dabaye.
+    # Chat ki asli numeric id SILENTLY seekh lo (owner ko DM spam nahi).
+    b = match_block_by_title(chat.title) if chat.title else None
+    if b:
+        db_set_chat_id(b["name"], chat.id)
+    # Sirf USER ko batao ki approve ho gaya — tab wo gate par button dabayega.
     if approved:
         try:
             await context.bot.send_message(
@@ -1012,19 +1044,6 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception:
             pass
-    if chat.id not in _id_told:
-        _id_told.add(chat.id)
-        for admin in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    admin,
-                    "Naya join request aaya — is chat ki numeric id ye hai:\n\n"
-                    f"{chat.title}  ->  id: {chat.id}\n\n"
-                    "config.py -> LINK_BLOCKS -> us block ke \"id\" me ye number "
-                    "daal do, tabhi force-join verify hoga.",
-                )
-            except Exception:
-                pass
 
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1034,32 +1053,34 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not cm or not cm.chat:
         return
     chat = cm.chat
+    # PRIVATE chat = kisi ne bot ko /start kiya. Ye notify karne layak NAHI —
+    # warna har naye user par owner ko DM spam hota hai.
+    if chat.type == ChatType.PRIVATE:
+        return
     status = getattr(cm.new_chat_member, "status", "")
     log.info("my_chat_member: %s (id=%s) status=%s", chat.title, chat.id, status)
     if status in (ChatMember.LEFT, ChatMember.BANNED):
         return  # bot nikaal diya gaya
 
-    is_admin_now = status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER)
+    # id SILENTLY seekh lo
     b = match_block_by_title(chat.title) if chat.title else None
-    lines = [
-        f"Chat: {chat.title}",
-        f"ID: {chat.id}",
-        f"Bot status: {status}",
-    ]
     if b:
         db_set_chat_id(b["name"], chat.id)
+
+    # Sirf tab notify karo jab status badla ho (same event baar baar na aaye).
+    if _chat_status.get(chat.id) == status:
+        return
+    _chat_status[chat.id] = status
+    _prune(_chat_status, 500)
+
+    lines = [f"Chat: {chat.title}", f"ID: {chat.id}", f"Bot status: {status}"]
+    if b:
         lines.append(f"Block match: {b['name']} — id SAVE ho gayi")
     else:
-        lines.append(
-            "Ye title kisi block se match nahi hua — /setid <block name> <id> se daalo."
-        )
-    if not is_admin_now:
-        lines.append("⚠️ Bot ADMIN nahi hai — is chat ka verify kaam nahi karega.")
-    for admin in ADMIN_IDS:
-        try:
-            await context.bot.send_message(admin, "\n".join(lines))
-        except Exception:
-            pass
+        lines.append("Title kisi block se match nahi hua — /setid <block name> <id>")
+    if status not in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+        lines.append("⚠️ Bot ADMIN nahi — is chat ka verify nahi hoga")
+    await _notify_owner(context.bot, "\n".join(lines))
 
 
 # =====================================================================
@@ -1085,15 +1106,7 @@ async def learn_chat_id(update: Update, context):
         return
     db_set_chat_id(b["name"], chat.id)
     log.info("Learned chat id: %s -> %s", b["name"], chat.id)
-    for admin in ADMIN_IDS:
-        try:
-            await context.bot.send_message(
-                admin,
-                f"Chat id mil gayi: \"{b['name']}\" -> {chat.id}\n"
-                "Ab force-join verify ise check karega.",
-            )
-        except Exception:
-            pass
+    await _notify_owner(context.bot, f"Chat id mil gayi: \"{b['name']}\" -> {chat.id}")
 
 
 async def on_chat_seen(update: Update, context: ContextTypes.DEFAULT_TYPE):

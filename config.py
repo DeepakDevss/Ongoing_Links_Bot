@@ -66,6 +66,10 @@ ADMIN_IDS = [
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0) or (ADMIN_IDS[0] if ADMIN_IDS else 0)
 OWNER_NAME = os.getenv("OWNER_NAME", "")
 
+# Owner ko notification DM bhejne hain? Default False = koi spam nahi.
+# (Sab kuch /diag se kabhi bhi dekh sakte ho — wahi behtar tareeka hai.)
+NOTIFY_OWNER = os.getenv("NOTIFY_OWNER", "False").lower() == "true"
+
 
 # ---------------------------------------------------------------------
 # #4  LINK BLOCKS  (yahi buttons user ko dikhte hain — isi order mein)
