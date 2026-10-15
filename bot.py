@@ -485,11 +485,12 @@ async def _is_member(context, chat_id, user_id, force=False):
     return ok
 
 
-def required_count() -> int:
+def required_count(total=None) -> int:
     """Kitne VERIFIABLE blocks join karna zaroori hai.
-    Agar koi block verifiable nahi (numeric IDs missing) to 0."""
-    total = len(enforced_blocks())
-    if total == 0:
+    total=None -> enforced_blocks() ka count. 0 -> koi requirement nahi."""
+    if total is None:
+        total = len(enforced_blocks())
+    if total <= 0:
         return 0
     val = str(MIN_JOINS_REQUIRED).strip().lower()
     if val == "all":
@@ -508,6 +509,8 @@ def has_required_blocks() -> bool:
 async def join_status(context, user_id, force=False):
     """(joined, missing, unknown, need).
     unknown = jinhe check hi nahi kar paye (bot admin nahi / id galat).
+    need SIRF un blocks par count hota hai jo sach me verify ho sake — isliye
+    agar kuch bhi verify na ho to need 0, aur gate user ko block nahi karta.
     force=True -> cache ignore karo, fresh check (Check button ke liye)."""
     joined, missing, unknown = [], [], []
     for chat in enforced_blocks():
@@ -518,7 +521,12 @@ async def join_status(context, user_id, force=False):
             missing.append(chat)
         else:
             unknown.append(chat)
-    return joined, missing, unknown, required_count()
+    need = required_count(len(joined) + len(missing))
+    return joined, missing, unknown, need
+
+
+# jin users ne gate ek baar paar kar liya (jab verify possible hi nahi hai)
+_passed: set = set()
 
 
 async def needs_join(context, user_id, force=False) -> bool:
@@ -528,11 +536,11 @@ async def needs_join(context, user_id, force=False) -> bool:
     if not has_required_blocks():
         return False
     joined, _missing, _unknown, need = await join_status(context, user_id, force=force)
-    if need <= 0:
-        # Koi verifiable block nahi (numeric IDs config me nahi hain) ->
-        # gate dikhta hai par verify nahi ho sakta (admin ko IDs daalni hongi).
-        return True
-    return len(joined) < need
+    if need > 0:
+        return len(joined) < need
+    # Kuch bhi verify nahi ho sakta (IDs/bot-admin missing) -> gate sirf EK BAAR
+    # dikhao. Warna har message par gate dikhta rehta aur bot kabhi na chalta.
+    return user_id not in _passed
 
 
 def link_keyboard(extra_rows=None):
@@ -839,43 +847,65 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================================
 #  CALLBACKS
 # =====================================================================
+_warned: set = set()
+
+
+async def _warn_admin_unverifiable(context, blocks):
+    """Bot in chats ko verify nahi kar paya -> admin ko ek baar batao."""
+    names = sorted(b["name"] for b in blocks)
+    key = tuple(names)
+    if key in _warned:
+        return
+    _warned.add(key)
+    text = (
+        "⚠️ Gate verify nahi ho paya — in chats me bot ADMIN nahi hai (ya id galat):\n\n"
+        + "\n".join(f"- {n}" for n in names)
+        + "\n\nBot ko wahan admin banao, tabhi force-join lagega."
+    )
+    for admin in ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin, text)
+        except Exception:
+            pass
+
+
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     user = update.effective_user
-    data = q.data
 
-    if data == "check_join":
-        # Strict: cache ignore karke fresh check — join karke turant chhod diya
-        # ho, ya cache purana ho, to bhi pakda jaye.
-        joined, missing, unknown, need = await join_status(context, user.id, force=True)
-        if need > 0 and len(joined) < need:
-            if unknown and not missing:
-                # Bot check hi nahi kar paya -> ye admin ka setup problem hai.
-                await q.answer(
-                    "Setup problem: bot in channels me admin nahi hai (ya id galat). "
-                    "Admin ko bolo — tabhi verify hoga.",
-                    show_alert=True,
-                )
-            else:
-                # Bina join kiye Check dabaya -> naya message: caption + links + Check.
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=JOIN_PROMPT,
-                    reply_markup=link_keyboard(extra_rows=[
-                        [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
-                    ]),
-                )
-        else:
-            # Verify ho gaya — gate message hata do, koi doosra menu/message nahi.
-            try:
-                await q.message.delete()
-            except Exception as e:
-                log.warning("Gate delete fail: %s", e)
-                try:
-                    await q.edit_message_text("Verified. Ab seedha apna sawaal likho.")
-                except Exception:
-                    pass
+    if q.data != "check_join":
+        await q.answer()
+        return
+
+    # Strict: cache ignore karke fresh check — join karke turant chhod diya
+    # ho, ya cache purana ho, to bhi pakda jaye.
+    joined, missing, unknown, need = await join_status(context, user.id, force=True)
+
+    if need > 0 and len(joined) < need:
+        # Bina join kiye Check dabaya -> naya message: caption + links + Check.
+        await q.answer()
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=JOIN_PROMPT,
+            reply_markup=link_keyboard(extra_rows=[
+                [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
+            ]),
+        )
+        return
+
+    # Pass. (Ek hi baar answer karo — dobara answer karne par Telegram error deta hai.)
+    await q.answer()
+    _passed.add(user.id)
+    if unknown and not joined and not missing:
+        await _warn_admin_unverifiable(context, unknown)
+    try:
+        await q.message.delete()
+    except Exception as e:
+        log.warning("Gate delete fail: %s", e)
+        try:
+            await q.edit_message_text("Verified. Ab seedha apna sawaal likho.")
+        except Exception:
+            pass
 
 
 # =====================================================================
