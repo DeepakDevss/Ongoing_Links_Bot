@@ -873,44 +873,77 @@ _RIGHTS = (
 )
 
 
+def _err_hint(e) -> str:
+    """Telegram error ko simple bhasha me."""
+    s = str(e).lower()
+    if "forbidden" in s:
+        return "bot us chat me nahi hai (remove ho gaya?)"
+    if "not found" in s:
+        return "id galat hai"
+    if "inaccessible" in s:
+        return "bot admin nahi hai"
+    return type(e).__name__
+
+
 async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: har block ka poora status — id, bot ka role, uske permissions,
-    aur tum khud us chat me join ho ya nahi."""
+    """Admin: poora status — har channel ALAG BLOCK me, spacing + font ke saath,
+    aur neeche total kitne channel join karne hain wo summary."""
     if not is_admin(update.effective_user.id):
         return
     me = await _get_me(context)
     learned = _learned_ids()
     uid = update.effective_user.id
-    out = ["BOT STATUS", ""]
-    for b in LINK_BLOCKS:
-        out.append(f"{b['name']}")
-        if not b.get("require_join"):
-            out.append("   link-only (check nahi hota)")
+    sc, bd = fonts.small_caps, fonts.bold
+    sep = "━━━━━━━━━━━━━━━━━"
+    req_blocks = [x for x in LINK_BLOCKS if x.get("require_join")]
+    joined_count = 0
+    verifiable = 0
+    out = [bd("BOT STATUS"), ""]
+    for blk in LINK_BLOCKS:
+        emoji = blk.get("emoji", "")
+        out.append(sep)
+        out.append(f"{emoji} {bd(blk['name'])}".strip())
+        out.append(sep)
+        if not blk.get("require_join"):
+            out.append(f"{sc('type')} : {sc('link only')}")
+            out.append("")
             continue
-        cid = b.get("id") or learned.get(b["name"])
+        cid = blk.get("id") or learned.get(blk["name"])
         if not cid:
-            out.append("   id: NAHI MILI  (/getid ya /setid se daalo)")
+            out.append(f"{sc('id')}   : {bd('NOT FOUND')}")
+            out.append(f"{sc('fix')}  : /getid  {sc('or')}  /setid")
+            out.append("")
             continue
-        out.append(f"   id: {cid}")
+        out.append(f"{sc('id')}   : {cid}")   # plain rakha - copy karne me aasan
         try:
             bm = await context.bot.get_chat_member(chat_id=cid, user_id=me.id)
-            out.append(f"   bot: {bm.status}")
-            if bm.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+            st = bm.status
+            out.append(f"{sc('bot')}  : {bd(st)}")
+            if st in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
                 on = [r.replace("can_", "") for r in _RIGHTS if getattr(bm, r, None)]
                 off = [r.replace("can_", "") for r in _RIGHTS if not getattr(bm, r, None)]
-                out.append(f"   ON : {', '.join(on) if on else 'none'}")
-                out.append(f"   OFF: {', '.join(off) if off else 'none'}")
+                out.append(f"{sc('on')}   : {', '.join(on) if on else '-'}")
+                out.append(f"{sc('off')}  : {', '.join(off) if off else '-'}")
             else:
-                out.append("   ⚠️ bot ADMIN nahi — verify nahi hoga")
+                out.append(f"{sc('note')} : {sc('bot admin nahi - verify nahi hoga')}")
         except Exception as e:
-            out.append(f"   ⚠️ bot check FAIL: {type(e).__name__}")
+            out.append(f"{sc('bot')}  : {bd('FAIL')} - {_err_hint(e)}")
         try:
             um = await context.bot.get_chat_member(chat_id=cid, user_id=uid)
-            out.append(f"   aap joined: {'haan' if um.status not in NOT_MEMBER_STATUSES else 'nahi'}")
-        except Exception:
-            out.append("   aap joined: pata nahi")
-    out.append("")
-    out.append(f"Required joins: {required_count()}  |  Gate: {JOIN_FAIL_MODE}")
+            is_in = um.status not in NOT_MEMBER_STATUSES
+            out.append(f"{sc('you')}  : {bd('joined' if is_in else 'not joined')}")
+            if is_in:
+                joined_count += 1
+            verifiable += 1
+        except Exception as e:
+            out.append(f"{sc('you')}  : {bd('?')} - {_err_hint(e)}")
+        out.append("")
+    need = required_count(verifiable)
+    out.append(sep)
+    out.append(f"{sc('total channels')} : {bd(str(len(req_blocks)))}")
+    out.append(f"{sc('you joined')}     : {bd(str(joined_count))}")
+    out.append(f"{sc('you need')}       : {bd(str(need))}")
+    out.append(sep)
     await update.effective_message.reply_text("\n".join(out))
 
 
