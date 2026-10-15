@@ -1,6 +1,6 @@
 python-telegram-bot[rate-limiter]>=22.0,<23
 aiolimiter>=1.1
 google-genai>=2.0
-fastapi>=0.115
+fastapi>=0.115.3
 uvicorn[standard]>=0.30
-python-dotenv>=1.0
+python-dotenv>=1.2.2

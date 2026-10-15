@@ -3,13 +3,13 @@
 A Telegram community bot that gates access behind channel membership, welcomes new members, answers messages with AI, auto-approves join requests, and grows through a referral system. Runs on Render as a webhook service.
 
 - Bot: https://t.me/ANIME_WORLD_8BOT
-- Repository: https://github.com/DeepakDevss/Telegram_Invited_AIBot
+- Repository: https://github.com/DeepakDevss/Ongoing_Links_Bot
 
 ---
 
 ## Overview
 
-Ongoing Links runs as a webhook-based Python service. It handles community management (force-join gate, auto-approval of join requests, welcome messages, referral tracking) alongside an AI chat layer that replies to every private message and to group messages that mention the bot or reply to it.
+Ongoing Links runs as a webhook-based Python service. It handles community management (force-join gate, auto-approval of join requests, welcome messages, referral tracking) alongside an AI chat layer that replies to every private message and to group messages that @mention the bot.
 
 The force-join check runs in both private and group chats, so adding the bot to a group doesn't get anyone past the gate. All settings live in one file (`config.py`), and all runtime data is kept in a local JSON database.
 
@@ -52,7 +52,7 @@ The force-join check runs in both private and group chats, so adding the bot to 
 ## Project Structure
 
 ```
-Telegram_Invited_AIBot/
+Ongoing_Links_Bot/
 ├── bot.py               Bot logic, database, AI, handlers, webhook server
 ├── config.py            All settings — the only file that must be edited
 ├── fonts.py             Unicode text styling helpers
@@ -78,8 +78,8 @@ data/db.json        Persistent user, chat, and referral data
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/DeepakDevss/Telegram_Invited_AIBot.git
-cd Telegram_Invited_AIBot
+git clone https://github.com/DeepakDevss/Ongoing_Links_Bot.git
+cd Ongoing_Links_Bot
 ```
 
 ### 2. Install dependencies

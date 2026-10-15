@@ -25,11 +25,11 @@
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import random
+import secrets
 import threading
 import time
 from datetime import datetime, timezone
@@ -126,8 +126,16 @@ def _db_load():
             base = _db_default()
             base.update(data)
             return base
-        except Exception:
-            pass
+        except Exception as e:
+            # Corrupt DB ko CHUPCHAAP reset MAT karo — warna saara data ud jata
+            # hai aur pata bhi nahi chalta. File alag rakho + log karo.
+            log.error("DB load fail (%s): %s", DB_PATH, e)
+            try:
+                bad = DB_PATH + ".corrupt-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+                os.replace(DB_PATH, bad)
+                log.error("Corrupt DB ko %s par bhej diya", bad)
+            except Exception:
+                pass
     return _db_default()
 
 
@@ -136,6 +144,8 @@ def _db_save(data):
     tmp = DB_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())   # power-loss par aadhi likhi file na bane
     os.replace(tmp, DB_PATH)
 
 
@@ -170,6 +180,7 @@ def db_add_user(user):
     if time.time() - _seen_cache.get(user.id, 0) < 300:
         return False
     _seen_cache[user.id] = time.time()
+    _prune(_seen_cache, 10000)
     with _db_lock:
         data = _db_load()
         uid = str(user.id)
@@ -183,10 +194,23 @@ def db_add_user(user):
         })
         if is_new:
             entry["joined_at"] = _now()
-            data["stats"]["total_started"] = data["stats"].get("total_started", 0) + 1
         data["users"][uid] = entry
         _db_save(data)
         return is_new
+
+
+def db_count_start():
+    """Har /start par ginti — 'Total started' asli /start count ho
+    (pehle sirf naye user par badhta tha, isliye metric galat tha)."""
+    with _db_lock:
+        data = _db_load()
+        data["stats"]["total_started"] = data["stats"].get("total_started", 0) + 1
+        _db_save(data)
+
+
+def db_user_exists(uid) -> bool:
+    with _db_lock:
+        return str(uid) in _db_load()["users"]
 
 
 def db_all_users():
@@ -445,6 +469,16 @@ def _norm(s) -> str:
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
 
+def _clean_title(t) -> str:
+    """Group title AI ko bhejne se pehle saaf karo — warna koi apne group ka naam
+    'ignore all previous instructions...' rakh ke prompt-inject kar sakta hai."""
+    if not t:
+        return ""
+    t = " ".join(str(t).split())              # newline / tab hata do
+    t = t.replace('"', "'").replace("(", "[").replace(")", "]")
+    return t[:64]
+
+
 def match_block_by_title(title):
     """Title ko LINK_BLOCKS ke naam se match karo (exact, phir loose)."""
     t = _norm(title)
@@ -481,6 +515,24 @@ _member_cache: dict[tuple[int, int], tuple[bool, float]] = {}
 
 # Check button ka anti-spam cooldown (user_id -> last time)
 _check_cd: dict = {}
+
+# AI ke liye per-user rate limit (paid quota bachane ke liye)
+_ai_hits: dict = {}
+_AI_WINDOW = 60
+_AI_MAX = 15
+
+
+def _ai_allowed(uid) -> bool:
+    """Ek user 60 second me max _AI_MAX AI calls kar sakta hai."""
+    now = time.time()
+    hits = _ai_hits.setdefault(uid, [])
+    while hits and now - hits[0] > _AI_WINDOW:
+        hits.pop(0)
+    if len(hits) >= _AI_MAX:
+        return False
+    hits.append(now)
+    _prune(_ai_hits, 5000)
+    return True
 
 
 def _prune(cache: dict, keep: int):
@@ -667,6 +719,7 @@ async def verify_blocks_on_startup(app: Application):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_add_user(user)
+    db_count_start()
 
     if db_is_banned(user.id):
         await update.effective_message.reply_text("You have been blocked from using this bot.")
@@ -684,7 +737,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg.startswith("ref_"):
             try:
                 referrer_id = int(arg[4:])
-                if referrer_id != user.id and db_add_referral(referrer_id, user.id):
+                # Referrer asli hona chahiye aur banned na ho — warna koi bhi
+                # fake id bhej ke referral count badha sakta hai.
+                if (referrer_id != user.id
+                        and db_user_exists(referrer_id)
+                        and not db_is_banned(referrer_id)
+                        and db_add_referral(referrer_id, user.id)):
                     try:
                         await context.bot.send_message(
                             referrer_id,
@@ -764,7 +822,16 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args and not msg.reply_to_message:
         await msg.reply_text("Use: /broadcast <message>  (or reply to a message with /broadcast)")
         return
-    text = " ".join(context.args) if context.args else msg.reply_to_message.text
+    if context.args:
+        text = " ".join(context.args)
+    else:
+        r = msg.reply_to_message
+        text = (r.text or r.caption or "").strip()   # media par text None hota hai
+    if not text:
+        await msg.reply_text(
+            "Kuch text nahi mila (media par caption bhi nahi). Use: /broadcast <message>"
+        )
+        return
     users = db_all_users()
     sent = failed = 0
     for u in users:
@@ -1007,6 +1074,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Pass. (Ek hi baar answer karo — dobara answer karne par Telegram error deta hai.)
     await q.answer()
     _passed.add(user.id)
+    _prune(_passed, 10000)
     if unknown and not joined and not missing:
         await _warn_admin_unverifiable(context, unknown)
     try:
@@ -1156,6 +1224,11 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if await needs_join(context, user.id):
         await send_join_gate(update, context)
         return
+    if not _ai_allowed(user.id):
+        await update.effective_message.reply_text(
+            f"{fonts.small_caps('Slow down')} — {fonts.small_caps('bahut jaldi messages, thodi der baad try karo')}."
+        )
+        return
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
     await update.effective_message.reply_text(
         await ask_ai(update.effective_message.text, where="a private chat",
@@ -1189,8 +1262,11 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=link_keyboard(),
         )
         return
+    if not _ai_allowed(update.effective_user.id):
+        return   # group me chupchaap skip (group spam na ho)
     prompt = _strip_mention(msg.text, me.username) or "The user mentioned you. Greet them warmly."
-    where = f'the Telegram group "{msg.chat.title}"' if msg.chat.title else "a Telegram group"
+    title = _clean_title(msg.chat.title)
+    where = f'the Telegram group "{title}"' if title else "a Telegram group"
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
     await msg.reply_text(await ask_ai(prompt, where=where, chat_id=msg.chat.id,
                                       note=_owner_note(update.effective_user.id)))
@@ -1246,8 +1322,10 @@ def run_webhook(app: Application):
     from fastapi import FastAPI, Request, Response
     import uvicorn
 
-    # Path me BOT_TOKEN NAHI daalte (warna logs/screenshot se token leak hota hai).
-    secret = WEBHOOK_SECRET or hashlib.sha256(BOT_TOKEN.encode()).hexdigest()[:32]
+    # RANDOM per-boot secret. BOT_TOKEN se derive NAHI karte — warna token
+    # leak hone par webhook bhi forge ho sakta hai. Har boot par set_webhook
+    # dobara hota hai, isliye random secret theek chalta hai.
+    secret = WEBHOOK_SECRET or secrets.token_urlsafe(32)
     webhook_path = f"/tg/{secret}"
 
     @asynccontextmanager
@@ -1282,7 +1360,8 @@ def run_webhook(app: Application):
     async def health():
         return {"status": "ok", "bot": "running"}
 
-    uvicorn.run(api, host="0.0.0.0", port=PORT, log_level="info")
+    # access_log=False -> webhook ka secret path logs me print nahi hota.
+    uvicorn.run(api, host="0.0.0.0", port=PORT, log_level="info", access_log=False)
 
 
 async def _polling_post_init(app: Application):
