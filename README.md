@@ -192,7 +192,8 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 | `/unban` | Remove a ban |
 | `/getid` | Look up a user or chat ID |
 | `/setid` | Set a configured chat ID |
-| `/diag` | Diagnostics for the force-join gate |
+| `/diag` | Diagnostics for the force-join gate, plus every chat the bot is in |
+| `/chats` | Every chat the bot is in — ID, type, bot status, and bound block |
 
 Admin commands are restricted to the configured administrator IDs.
 

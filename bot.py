@@ -107,7 +107,8 @@ _db_lock = threading.Lock()
 
 
 def _db_default():
-    return {"users": {}, "referrals": {}, "banned": [], "stats": {"total_started": 0}, "chat_ids": {}}
+    return {"users": {}, "referrals": {}, "banned": [],
+            "stats": {"total_started": 0}, "chat_ids": {}, "chats": {}}
 
 
 def _now():
@@ -169,6 +170,24 @@ def db_set_chat_id(name, chat_id):
         data.setdefault("chat_ids", {})[name] = int(chat_id)
         _db_save(data)
         _chat_ids_cache = dict(data["chat_ids"])
+
+
+def db_upsert_chat(chat_id, title, ctype, status=None):
+    """Bot jis bhi chat me hai uski detail yaad rakho (id, title, type, status)."""
+    with _db_lock:
+        data = _db_load()
+        c = data.setdefault("chats", {}).get(str(chat_id), {})
+        c.update({"id": int(chat_id), "title": title or "", "type": ctype or "",
+                  "seen": _now()})
+        if status:
+            c["status"] = status
+        data["chats"][str(chat_id)] = c
+        _db_save(data)
+
+
+def db_get_chats():
+    with _db_lock:
+        return dict(_db_load().get("chats", {}))
 
 
 _seen_cache: dict[int, float] = {}
@@ -774,7 +793,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — this message\n\n"
         "Chat with AI: in private, just type your question.\n"
         f"In a group, mention the bot (e.g. {BOT_USERNAME} hello).\n\n"
-        f"{fonts.small_caps('Admin')}: /stats /broadcast /ban /unban /getid /setid /diag"
+        f"{fonts.small_caps('Admin')}: /stats /broadcast /ban /unban /getid /setid /diag /chats"
     )
     await update.effective_message.reply_text(text)
 
@@ -954,6 +973,56 @@ def _err_hint(e) -> str:
     return type(e).__name__
 
 
+_SEP = "━━━━━━━━━━━━━━━━━"
+
+
+async def _known_chats_lines(context, me) -> list:
+    """Bot jin chats me hai unki LIVE list (id, title, type, bot ka status,
+    aur kaunse block se juda hai)."""
+    known = db_get_chats()
+    if not known:
+        return []
+    learned = _learned_ids()
+    bound = {}
+    for blk in LINK_BLOCKS:
+        c = blk.get("id") or learned.get(blk["name"])
+        if c:
+            bound[int(c)] = blk["name"]
+    sc, bd = fonts.small_caps, fonts.bold
+    items = sorted(known.items(), key=lambda kv: kv[1].get("title", "").lower())
+    out = [_SEP, f"{bd('CHATS BOT IS IN')} ({len(known)})", _SEP]
+    for _k, c in items[:15]:
+        cid = c.get("id")
+        try:
+            bm = await context.bot.get_chat_member(chat_id=cid, user_id=me.id)
+            st = bm.status
+        except Exception as e:
+            st = f"FAIL - {_err_hint(e)}"
+        out.append(f"{c.get('title') or '?'}  [{c.get('type') or '?'}]")
+        out.append(f"   {sc('id')}    : {cid}")
+        out.append(f"   {sc('bot')}   : {st}")
+        out.append(f"   {sc('block')} : {bound.get(int(cid), '-') if cid else '-'}")
+    if len(items) > 15:
+        out.append(f"… +{len(items) - 15} more")
+    out.append("")
+    return out
+
+
+async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: bot jin chats me hai, unki poori list."""
+    if not is_admin(update.effective_user.id):
+        return
+    me = await _get_me(context)
+    lines = await _known_chats_lines(context, me)
+    if not lines:
+        await update.effective_message.reply_text(
+            "Abhi koi chat yaad nahi hai.\n\nBot ko kisi group/channel me add karo, "
+            "ya us chat me koi message bhejo — phir ye list khud bhar jayegi."
+        )
+        return
+    await update.effective_message.reply_text("\n".join(lines).strip())
+
+
 async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: poora status — har channel ALAG BLOCK me, spacing + font ke saath,
     aur neeche total kitne channel join karne hain wo summary."""
@@ -1007,6 +1076,9 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             out.append(f"{sc('you')}  : {bd('?')} - {_err_hint(e)}")
         out.append("")
+    # Bot jin chats me hai (chahe block se match kare ya na) — poora section.
+    out.extend(await _known_chats_lines(context, me))
+
     need = required_count(verifiable)
     out.append(sep)
     out.append(f"{sc('total channels')} : {bd(str(len(req_blocks)))}")
@@ -1199,12 +1271,11 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = getattr(cm.new_chat_member, "status", "")
     log.info("my_chat_member: %s (id=%s) status=%s", chat.title, chat.id, status)
     if status in (ChatMember.LEFT, ChatMember.BANNED):
+        db_upsert_chat(chat.id, chat.title, str(chat.type or ""), status)
         return  # bot nikaal diya gaya
 
-    # id SILENTLY seekh lo
-    b = match_block_by_title(chat.title) if chat.title else None
-    if b:
-        db_set_chat_id(b["name"], chat.id)
+    # Poori chat detail + status yaad rakho (title match kare to block bhi bind).
+    learn_chat(update, status=status, force=True)
 
     # Sirf tab notify karo jab status badla ho (same event baar baar na aaye).
     if _chat_status.get(chat.id) == status:
@@ -1212,6 +1283,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _chat_status[chat.id] = status
     _prune(_chat_status, 500)
 
+    b = match_block_by_title(chat.title) if chat.title else None
     lines = [f"Chat: {chat.title}", f"ID: {chat.id}", f"Bot status: {status}"]
     if b:
         lines.append(f"Block match: {b['name']} — id SAVE ho gayi")
@@ -1232,24 +1304,36 @@ def _strip_mention(text: str, username: str) -> str:
     return re.sub(rf"@{re.escape(username)}", " ", text, flags=re.IGNORECASE).strip()
 
 
-async def learn_chat_id(update: Update, context):
-    """Jis chat me bot hai, uska numeric id seekho (title kisi block se match kare to)."""
+# chat_id -> last DB write time (har message par DB write na ho)
+_chat_seen: dict = {}
+
+
+def learn_chat(update, status=None, force=False):
+    """Bot jis chat me hai, uski POORI detail yaad rakho — id, title, type, status.
+    Pehle sirf wahi chats yaad hoti thi jinka title kisi block se match kare,
+    isliye /diag me baaki channels 'NOT FOUND' dikhate the — ab har chat
+    record hoti hai, chahe title match kare ya na kare.
+    Title match kare to block ki id bhi apne aap set kar dete hain."""
     chat = update.effective_chat
-    if not chat or not chat.title:
+    if not chat or chat.type == ChatType.PRIVATE:
         return
-    b = match_block_by_title(chat.title)
-    if not b:
-        return
-    if _learned_ids().get(b["name"]) == chat.id:
-        return
-    db_set_chat_id(b["name"], chat.id)
-    log.info("Learned chat id: %s -> %s", b["name"], chat.id)
-    await _notify_owner(context.bot, f"Chat id mil gayi: \"{b['name']}\" -> {chat.id}")
+    cid = chat.id
+    now = time.time()
+    if not force and now - _chat_seen.get(cid, 0) < 3600:
+        return   # 1 ghante me ek hi baar DB write
+    _chat_seen[cid] = now
+    _prune(_chat_seen, 5000)
+    title = chat.title or ""
+    db_upsert_chat(cid, title, str(chat.type or ""), status)
+    b = match_block_by_title(title) if title else None
+    if b and _learned_ids().get(b["name"]) != cid:
+        db_set_chat_id(b["name"], cid)
+        log.info("Block '%s' -> chat id %s (title match)", b["name"], cid)
 
 
 async def on_chat_seen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Channel post par bhi id seekho (bot us channel me admin ho to)."""
-    await learn_chat_id(update, context)
+    """Channel post par bhi chat yaad rakho (bot us channel me admin ho to)."""
+    learn_chat(update)
 
 
 async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1281,7 +1365,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text:
         return
-    await learn_chat_id(update, context)
+    learn_chat(update)
     me = await _get_me(context)
     mentioned = False
     for e in (msg.entities or []):
@@ -1341,6 +1425,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("getid", cmd_getid))
     app.add_handler(CommandHandler("setid", cmd_setid))
     app.add_handler(CommandHandler("diag", cmd_diag))
+    app.add_handler(CommandHandler("chats", cmd_chats))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
