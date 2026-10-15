@@ -154,11 +154,11 @@ MIN_JOINS_REQUIRED = os.getenv("MIN_JOINS_REQUIRED", "2")
 # Force-join gate par jo message dikhta hai (links ke upar).
 GATE_MESSAGE = os.getenv("GATE_MESSAGE", (
     "ʜᴇʟʟᴏ ᴛʜᴇʀᴇ..!⚡️\n\n"
-    "🫧ᴘʟᴇᴀsᴇ ᴊᴏɪɴ ᴏғ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ғɪʀsᴛ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪꜰʏ...!"
+    "🫧ᴘʟᴇᴀsᴇ ᴊᴏɪɴ ᴏғ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ғɪʀsᴛ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʀᴇǫᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ...!"
 ))
 
-# Gate ka verify button ka label.
-GATE_BUTTON_TEXT = os.getenv("GATE_BUTTON_TEXT", "✅ ᴠᴇʀɪꜰʏ")
+# Gate ke neeche wala button — yahi join-request/check karta hai.
+GATE_BUTTON_TEXT = os.getenv("GATE_BUTTON_TEXT", "🔔 ʀᴇǫᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ")
 
 
 # ---------------------------------------------------------------------

@@ -861,7 +861,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.answer(
                     f"Abhi {len(joined)}/{need} join hua hai.\n"
                     f"Ye join karo: {names}\n\n"
-                    "Join karke phir Verify karo.",
+                    "Join karke phir neeche wala button dabao.",
                     show_alert=True,
                 )
         else:
@@ -914,15 +914,27 @@ _id_told: set = set()
 
 async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     req = update.chat_join_request
+    approved = False
     if AUTO_APPROVE_JOIN_REQUESTS:
         try:
             await req.approve()
+            approved = True
         except Exception as e:
             log.warning("Approve fail: %s", e)
     # Yahan se channel/group ki ASLI numeric id milti hai (invite link se
     # nahi milti). Admin ko bhej do taaki config.py me daal sake.
     chat = req.chat
     log.info("Join request in %s (id=%s) from %s", chat.title, chat.id, req.from_user.id)
+    # User ko batao ki approve ho gaya — ab wo gate par button dabaye.
+    if approved:
+        try:
+            await context.bot.send_message(
+                req.from_user.id,
+                f"✅ {chat.title} me aapki request approve ho gayi.\n\n"
+                "Ab bot me wapas jaake neeche wala button dabao.",
+            )
+        except Exception:
+            pass
     if chat.id not in _id_told:
         _id_told.add(chat.id)
         for admin in ADMIN_IDS:
