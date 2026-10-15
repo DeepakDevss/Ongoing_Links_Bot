@@ -10,7 +10,7 @@
   Sirf "config.py" edit karni hai. Is file ko chhedne ki zaroorat nahi.
 
   Features:
-    1) Force-join gate (config.py ke LINK_BLOCKS se) + auto-approve join requests
+    1) Force-join gate (config.py ke LINK_BLOCKS se) + join requests owner ko
     2) Welcome message (photo + styled caption)
     3) AI chat — DM mein, aur group mein sirf @mention par (membership check ke saath)
     4) Referral / invite growth system
@@ -67,7 +67,6 @@ from config import (
     JOIN_FAIL_MODE,
     WELCOME_TEMPLATE,
     WELCOME_IMAGE,
-    AUTO_APPROVE_JOIN_REQUESTS,
     WEBHOOK_URL,
     WEBHOOK_SECRET,
     PORT,
@@ -343,24 +342,28 @@ def _disable_thinking():
         log.warning("Thinking config hata di — model ne accept nahi kiya.")
 
 
-# --- chhoti conversation memory (per chat) -----------------------------
-_HISTORY_TURNS = 6          # per chat kitne user+bot turns yaad rakhe
-_HISTORY_CHATS = 1000       # kitne chats ki memory (bound, memory leak nahi)
+# --- chhoti conversation memory (per USER, per chat) -------------------
+#   private chat -> key "u<user_id>"
+#   group        -> key "g<chat_id>:u<user_id>"
+#   (pehle sirf chat_id par key thi, isliye EK GROUP me sabki baatein ek hi
+#    history me mix ho jaati thi — ab har user ki apni memory hai)
+_HISTORY_TURNS = 6          # per key kitne user+bot turns yaad rakhe
+_HISTORY_CHATS = 1000       # kitni keys ki memory (bound, memory leak nahi)
 _history: dict = {}
 
 
-def _hist(chat_id):
-    return _history.get(chat_id, [])
+def _hist(mem_key):
+    """COPY return karo — warna background thread me iterate karte waqt
+    event loop list badal de to 'list changed size' error aa sakta hai."""
+    return list(_history.get(mem_key, []))
 
 
-def _hist_add(chat_id, role, text):
-    h = _history.setdefault(chat_id, [])
+def _hist_add(mem_key, role, text):
+    h = _history.setdefault(mem_key, [])
     h.append((role, text))
     if len(h) > _HISTORY_TURNS * 2:
         del h[: len(h) - _HISTORY_TURNS * 2]
-    if len(_history) > _HISTORY_CHATS:
-        for k in list(_history.keys())[: len(_history) - _HISTORY_CHATS]:
-            _history.pop(k, None)
+    _prune(_history, _HISTORY_CHATS)
 
 
 def _run_ai(model: str, prompt: str, history=None) -> str:
@@ -385,7 +388,7 @@ def busy_message() -> str:
     return AI_BUSY_MESSAGE.replace("{ai_link}", ai_block["url"] if ai_block else "AI")
 
 
-async def ask_ai(prompt: str, lite: bool = False, where: str = "", chat_id=None,
+async def ask_ai(prompt: str, lite: bool = False, where: str = "", mem_key=None,
                  note: str = "") -> str:
     """Prompt bhejo, reply lo. lite=True se sasta/fast model use hoga.
     where   = context line (group ka naam ya 'a private chat').
@@ -399,7 +402,7 @@ async def ask_ai(prompt: str, lite: bool = False, where: str = "", chat_id=None,
         bits.append(note)
     if bits:
         prompt = f"(Context: {'; '.join(bits)}.)\n\n{prompt}"
-    history = _hist(chat_id) if chat_id is not None else []
+    history = _hist(mem_key) if mem_key is not None else []
     # Model kabhi "500 UNAVAILABLE / high demand" deta hai -> retry + doosra model.
     # Fail-fast: kam attempts, chhota backoff (delay kam karne ke liye).
     models = [AI_MODEL_LITE, AI_MODEL] if lite else [AI_MODEL, AI_MODEL_LITE]
@@ -411,9 +414,9 @@ async def ask_ai(prompt: str, lite: bool = False, where: str = "", chat_id=None,
                 if text:
                     if len(text) > AI_MAX_CHARS:
                         text = text[: AI_MAX_CHARS - 20].rstrip() + "\n\n… (shortened)"
-                    if chat_id is not None:
-                        _hist_add(chat_id, "user", raw)
-                        _hist_add(chat_id, "model", text)
+                    if mem_key is not None:
+                        _hist_add(mem_key, "user", raw)
+                        _hist_add(mem_key, "model", text)
                     return text
             except Exception as e:
                 last_err = e
@@ -1038,8 +1041,35 @@ async def _warn_admin_unverifiable(context, blocks):
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     user = update.effective_user
+    data = q.data or ""
 
-    if q.data != "check_join":
+    # Join-request ka Approve button (sirf owner/admin dabaa sakta hai)
+    if data.startswith("jr_ok:"):
+        if not is_admin(user.id):
+            await q.answer("Sirf owner ye kar sakta hai.", show_alert=True)
+            return
+        try:
+            _, cid, uid = data.split(":")
+            await context.bot.approve_chat_join_request(chat_id=int(cid), user_id=int(uid))
+            await q.answer("Approved")
+            try:
+                await q.edit_message_text((q.message.text or "") + "\n\n✅ APPROVED")
+            except Exception:
+                pass
+            try:
+                await context.bot.send_message(
+                    int(uid),
+                    "✅ Aapki join request approve ho gayi. Ab bot me wapas jaake "
+                    "neeche wala button dabao.",
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            log.warning("Join approve fail: %s", e)
+            await q.answer(f"Approve fail: {e}", show_alert=True)
+        return
+
+    if data != "check_join":
         await q.answer()
         return
 
@@ -1118,33 +1148,41 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================================================
-#  AUTO-APPROVE JOIN REQUESTS
+#  JOIN REQUESTS  (owner approval, auto nahi)
 # =====================================================================
 async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Join request aaya -> OWNER ko details + Approve button bhejo.
+    AUTO-approve NAHI hota — owner khud approve kare tabhi banda join karta hai."""
     req = update.chat_join_request
-    approved = False
-    if AUTO_APPROVE_JOIN_REQUESTS:
-        try:
-            await req.approve()
-            approved = True
-        except Exception as e:
-            log.warning("Approve fail: %s", e)
-    chat = req.chat
-    log.info("Join request in %s (id=%s) from %s", chat.title, chat.id, req.from_user.id)
-    # Chat ki asli numeric id SILENTLY seekh lo (owner ko DM spam nahi).
+    chat, usr = req.chat, req.from_user
+    log.info("Join request: %s (id=%s) from %s (%s)",
+             chat.title, chat.id, usr.id, usr.full_name)
+    # Chat ki asli numeric id SILENTLY seekh lo (koi DM spam nahi).
     b = match_block_by_title(chat.title) if chat.title else None
     if b:
         db_set_chat_id(b["name"], chat.id)
-    # Sirf USER ko batao ki approve ho gaya — tab wo gate par button dabayega.
-    if approved:
-        try:
-            await context.bot.send_message(
-                req.from_user.id,
-                f"✅ {chat.title} me aapki request approve ho gayi.\n\n"
-                "Ab bot me wapas jaake neeche wala button dabao.",
-            )
-        except Exception:
-            pass
+
+    target = OWNER_ID or (ADMIN_IDS[0] if ADMIN_IDS else 0)
+    if not target:
+        return
+    sc, bd = fonts.small_caps, fonts.bold
+    uname = ("@" + usr.username) if usr.username else "-"
+    lines = [
+        bd("NEW JOIN REQUEST"),
+        "",
+        f"{sc('chat')}     : {chat.title}",
+        f"{sc('chat id')}  : {chat.id}",
+        f"{sc('name')}     : {usr.full_name}",
+        f"{sc('user id')}  : {usr.id}",
+        f"{sc('username')} : {uname}",
+    ]
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"jr_ok:{chat.id}:{usr.id}"),
+    ]])
+    try:
+        await context.bot.send_message(target, "\n".join(lines), reply_markup=kb)
+    except Exception as e:
+        log.warning("Owner DM fail: %s", e)
 
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1232,7 +1270,7 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
     await update.effective_message.reply_text(
         await ask_ai(update.effective_message.text, where="a private chat",
-                     chat_id=update.effective_chat.id,
+                     mem_key=f"u{user.id}",
                      note=_owner_note(user.id))
     )
 
@@ -1268,8 +1306,11 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = _clean_title(msg.chat.title)
     where = f'the Telegram group "{title}"' if title else "a Telegram group"
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
-    await msg.reply_text(await ask_ai(prompt, where=where, chat_id=msg.chat.id,
-                                      note=_owner_note(update.effective_user.id)))
+    await msg.reply_text(await ask_ai(
+        prompt, where=where,
+        mem_key=f"g{msg.chat.id}:u{update.effective_user.id}",
+        note=_owner_note(update.effective_user.id),
+    ))
 
 
 # =====================================================================

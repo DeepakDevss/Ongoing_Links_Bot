@@ -196,10 +196,9 @@ WELCOME_IMAGE = os.getenv(
     "welcome.png" if os.path.exists("welcome.png") else "assets/welcome.png",
 )
 
-# Join request turant approve karni hai? True = haan.
-AUTO_APPROVE_JOIN_REQUESTS = (
-    os.getenv("AUTO_APPROVE_JOIN_REQUESTS", "True").lower() == "true"
-)
+# NOTE: Join requests AUTO-approve NAHI hote. Har request OWNER ko DM jaati hai
+# (details + Approve button ke saath), aur owner approve kare tabhi banda
+# us channel/group me join karta hai.
 
 
 # ---------------------------------------------------------------------

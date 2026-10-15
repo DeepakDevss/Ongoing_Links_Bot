@@ -1,6 +1,6 @@
 # Ongoing Links
 
-A Telegram community bot that gates access behind channel membership, welcomes new members, answers messages with AI, auto-approves join requests, and grows through a referral system. Runs on Render as a webhook service.
+A Telegram community bot that gates access behind channel membership, welcomes new members, answers messages with AI, sends join requests to the owner for approval, and grows through a referral system. Runs on Render as a webhook service.
 
 - Bot: https://t.me/ANIME_WORLD_8BOT
 - Repository: https://github.com/DeepakDevss/Ongoing_Links_Bot
@@ -9,7 +9,7 @@ A Telegram community bot that gates access behind channel membership, welcomes n
 
 ## Overview
 
-Ongoing Links runs as a webhook-based Python service. It handles community management (force-join gate, auto-approval of join requests, welcome messages, referral tracking) alongside an AI chat layer that replies to every private message and to group messages that @mention the bot.
+Ongoing Links runs as a webhook-based Python service. It handles community management (force-join gate, owner approval of join requests, welcome messages, referral tracking) alongside an AI chat layer that replies to every private message and to group messages that @mention the bot.
 
 The force-join check runs in both private and group chats, so adding the bot to a group doesn't get anyone past the gate. All settings live in one file (`config.py`), and all runtime data is kept in a local JSON database.
 
@@ -18,7 +18,7 @@ The force-join check runs in both private and group chats, so adding the bot to 
 ## Features
 
 - **Force-join gate** — Users must join the configured channels before the bot will respond. Applies in private chats and in groups.
-- **Auto-approval of join requests** — Incoming join requests to the target chat are approved automatically.
+- **Owner approval of join requests** — Each incoming join request is sent to the owner with the requester's details and an Approve button. Nothing is auto-approved.
 - **Welcome message** — New members get a photo caption welcome.
 - **AI chat** — Every private message gets an AI reply. In groups, the bot replies only when mentioned or replied to.
 - **Referral system** — Each user gets a personal invite link. Invite counts are tracked and shown through `/ref`.
