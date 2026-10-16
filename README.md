@@ -147,7 +147,10 @@ Other settings you may want (all optional, defaults are set in `config.py`):
 
 | Setting | Purpose |
 |---|---|
-| `OWNER_ID` / `OWNER_NAME` | Bot owner; skips the gate and receives join requests |
+| `OWNER_ID` / `OWNER_NAME` | Bot owner; skips the gate, full power |
+| `ADMIN_IDS` / `ADMIN_NAMES` | Admin IDs and their display names, in the same order |
+| `BOT_BRAND` | Display name used in messages (default `Ongoing`) |
+| `RULES_TEXT` | Text shown by `/rules` |
 | `NOTIFY_OWNER` | `True` = send DM notifications to the owner (default `False`) |
 | `GATE_MESSAGE` / `GATE_BUTTON_TEXT` / `JOIN_PROMPT` | Gate text, button label, and the "join first" prompt |
 | `AI_MODEL` / `AI_MODEL_LITE` / `AI_THINKING_LEVEL` | AI model IDs and thinking level |
@@ -175,27 +178,57 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 
 ## Bot Usage
 
-### Private chat
+## Roles
+
+| Role | Who | Power |
+|---|---|---|
+| Owner | `OWNER_ID` | Everything, including adding/removing admins. Skips the force-join gate. |
+| Admin | `ADMIN_IDS` (labelled by `ADMIN_NAMES`) | Moderation and management. Cannot add/remove admins. |
+| Member | everyone else | User commands only. |
+
+`ADMIN_IDS[0]` is "Admin 1" and is the one who receives join requests.
+
+---
+
+## Commands
+
+### Everyone
 
 | Command | Description |
 |---|---|
 | `/start` | Entry point; runs the force-join check, then you can just type |
-| `/ref` | Returns the user's personal invite link and invite count |
+| `/help` | The commands available to your role |
+| `/id` | Your Telegram user ID |
+| `/ref` | Your referral link and invite count |
+| `/rules` | The rules text (`RULES_TEXT`) |
+| `/report` | Reply to a message to report it to the admins |
 
-### Admin
+### Admin and Owner
 
 | Command | Description |
 |---|---|
 | `/stats` | Usage and growth statistics |
 | `/broadcast` | Send a message to all known users |
-| `/ban` | Ban a user |
-| `/unban` | Remove a ban |
-| `/getid` | Look up a user or chat ID |
+| `/ban` / `/unban` | Bot-wide ban / unban by user ID |
+| `/getid` | Look up a chat ID from a forwarded message |
 | `/setid` | Set a configured chat ID |
-| `/diag` | Diagnostics for the force-join gate, plus every chat the bot is in |
-| `/chats` | Every chat the bot is in — ID, type, bot status, and bound block |
+| `/diag` | Gate diagnostics, plus every chat the bot is in |
+| `/chats` | Every chat the bot is in — ID, type, bot status, bound block |
+| `/perms` | The bot's permissions in this chat, what each one means, and its command |
+| `/admins` | Owner and admins |
 
-Admin commands are restricted to the configured administrator IDs.
+### Group moderation — the bot must be an admin in that group
+
+| Command | Needs permission | What it does |
+|---|---|---|
+| `/settitle <title>` | Change Group Info | Renames the group |
+| `/invitelink` | Invite Users via Link | Creates an invite link |
+| `/kick` / `/unkick` | Ban Users | Bans / unbans a member |
+| `/del` | Delete Messages | Deletes the replied-to message |
+| `/pin` | Pin Messages | Pins the replied-to message |
+| `/promote` | Add New Admins | Promotes a member to admin |
+
+Reply to a member's message, or pass a user ID as the argument.
 
 ---
 

@@ -1,6 +1,6 @@
 """
 =====================================================================
-  bot.py — LINNET BOT (poora bot ek hi file mein)
+  bot.py — ONGOING BOT (poora bot ek hi file mein)
 =====================================================================
   Isme sab kuch hai:
     • Database (users / referrals / ban)   -> section "DATABASE"
@@ -25,6 +25,7 @@
 """
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -76,6 +77,8 @@ from config import (
     MIN_JOINS_REQUIRED,
     OWNER_ID,
     OWNER_NAME,
+    admin_label,
+    RULES_TEXT,
     NOTIFY_OWNER,
     GATE_MESSAGE,
     GATE_BUTTON_TEXT,
@@ -461,6 +464,15 @@ def is_privileged(uid: int) -> bool:
     return is_owner(uid) or is_admin(uid)
 
 
+def role_of(uid) -> str:
+    """Owner / Admin 1 / Admin 2 / Member — dikhane ke liye."""
+    if is_owner(uid):
+        return "Owner"
+    if is_admin(uid):
+        return admin_label(uid)
+    return "Member"
+
+
 def _owner_note(uid) -> str:
     """Owner bol raha hai to AI ko bata do (gate ke baahar)."""
     if is_owner(uid):
@@ -497,8 +509,19 @@ def _clean_title(t) -> str:
     return t[:64]
 
 
+def _tokens(s):
+    return [w for w in re.split(r"[^a-z0-9]+", (s or "").lower()) if len(w) >= 3]
+
+
+def _fuzzy_in(needle, hay, cutoff=0.8):
+    return any(difflib.SequenceMatcher(None, needle, h).ratio() >= cutoff for h in hay)
+
+
 def match_block_by_title(title):
-    """Title ko LINK_BLOCKS ke naam se match karo (exact, phir loose)."""
+    """Title ko LINK_BLOCKS ke naam se match karo.
+    1) exact (normalized)   2) substring   3) token-based (naam thoda alag ho)
+    #3 isliye: block "ANIME WORLD HINDI" aur asli channel ka naam
+    "ANIME WORLD OFFICIAL HINDI DUBBED" — pehle ye bind hi nahi hota tha."""
     t = _norm(title)
     if not t:
         return None
@@ -507,11 +530,17 @@ def match_block_by_title(title):
             return b
     for b in LINK_BLOCKS:
         n = _norm(b["name"])
-        # Loose match sirf tab jab naam kaafi lamba ho — warna "AI" jaisa
-        # chhota naam "MAIN" me bhi match ho jata hai.
         if len(n) >= 6 and (n in t or t in n):
             return b
-    return None
+    hay = _tokens(title)
+    if not hay:
+        return None
+    hits = []
+    for b in LINK_BLOCKS:
+        toks = _tokens(b["name"])
+        if toks and all(_fuzzy_in(w, hay) for w in toks):
+            hits.append(b)
+    return hits[0] if len(hits) == 1 else None   # ambiguous ho to kuch na karo
 
 
 def enforced_blocks():
@@ -785,17 +814,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        f"{fonts.small_caps('Help and commands')}\n\n"
-        "/start — start the bot\n"
-        "/ref — get your referral link\n"
-        "/id — see your Telegram ID\n"
-        "/help — this message\n\n"
-        "Chat with AI: in private, just type your question.\n"
-        f"In a group, mention the bot (e.g. {BOT_USERNAME} hello).\n\n"
-        f"{fonts.small_caps('Admin')}: /stats /broadcast /ban /unban /getid /setid /diag /chats"
-    )
-    await update.effective_message.reply_text(text)
+    """Role ke hisaab se commands — Member / Admin / Owner."""
+    uid = update.effective_user.id
+    sc, bd = fonts.small_caps, fonts.bold
+    out = [bd("HELP"), "", f"{sc('you are')} : {bd(role_of(uid))}", ""]
+    out.append(bd("Everyone"))
+    out.append("/start — bot start / force-join gate")
+    out.append("/help — ye message")
+    out.append("/id — apni Telegram ID")
+    out.append("/ref — referral link + invite count")
+    out.append("/rules — rules")
+    out.append("/report — kisi message par reply karke report")
+    out.append("")
+    out.append(f"{sc('Chat')}: DM me seedha likho. Group me {BOT_USERNAME} ko mention karo.")
+    if is_privileged(uid):
+        out.append("")
+        out.append(bd("Admin"))
+        out.append("/stats /broadcast /ban /unban /getid /setid")
+        out.append("/diag /chats /perms /admins")
+        out.append("/pin /del /settitle /invitelink /kick /unkick /promote")
+        out.append(f"{sc('(group commands sirf group me — bot ko admin hona chahiye)')}")
+    if is_owner(uid):
+        out.append("")
+        out.append(bd("Owner"))
+        out.append("Aapke paas 100% power hai — saare admin commands + gate bypass.")
+    await _send_long(update.effective_message, "\n".join(out))
 
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -970,10 +1013,32 @@ def _err_hint(e) -> str:
         return "id galat hai"
     if "inaccessible" in s:
         return "bot admin nahi hai"
+    if "not enough rights" in s or "chat_admin_required" in s:
+        return "bot ke paas ye permission nahi hai"
+    if "method is available only" in s or "chat_write_forbidden" in s:
+        return "ye command is chat me nahi chalti"
+    if "user not found" in s or "participant" in s:
+        return "wo user is chat me nahi hai"
     return type(e).__name__
 
 
 _SEP = "━━━━━━━━━━━━━━━━━"
+
+
+async def _send_long(message, text, limit=3800):
+    """Telegram ki 4096 limit — lamba text tukdon me bhejo, warna error aata hai."""
+    if len(text) <= limit:
+        await message.reply_text(text)
+        return
+    part = ""
+    for line in text.split("\n"):
+        if part and len(part) + len(line) + 1 > limit:
+            await message.reply_text(part)
+            part = line
+        else:
+            part = f"{part}\n{line}" if part else line
+    if part:
+        await message.reply_text(part)
 
 
 async def _known_chats_lines(context, me) -> list:
@@ -1021,7 +1086,7 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     me = await _get_me(context)
     lines = await _known_chats_lines(context, me)
-    await update.effective_message.reply_text("\n".join(lines).strip())
+    await _send_long(update.effective_message, "\n".join(lines).strip())
 
 
 async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1086,7 +1151,7 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     out.append(f"{sc('you joined')}     : {bd(str(joined_count))}")
     out.append(f"{sc('you need')}       : {bd(str(need))}")
     out.append(sep)
-    await update.effective_message.reply_text("\n".join(out))
+    await _send_long(update.effective_message, "\n".join(out))
 
 
 # =====================================================================
@@ -1117,9 +1182,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Join-request ka Approve button (sirf owner/admin dabaa sakta hai)
     if data.startswith("jr_ok:"):
-        # Sirf OWNER approve kar sakta hai (OWNER_ID khaali ho to ADMIN_IDS[0]).
-        if user.id != (OWNER_ID or (ADMIN_IDS[0] if ADMIN_IDS else 0)):
-            await q.answer("Sirf owner ye kar sakta hai.", show_alert=True)
+        # Approve sirf ADMIN 1 (ADMIN_IDS[0]) ya OWNER kar sakta hai.
+        approver = ADMIN_IDS[0] if ADMIN_IDS else 0
+        if not (user.id == approver or is_owner(user.id)):
+            await q.answer("Sirf Admin 1 (ya owner) approve kar sakta hai.", show_alert=True)
             return
         try:
             _, cid, uid = data.split(":")
@@ -1238,7 +1304,8 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if b:
         db_set_chat_id(b["name"], chat.id)
 
-    target = OWNER_ID or (ADMIN_IDS[0] if ADMIN_IDS else 0)
+    # Join request OWNER ko nahi — ADMIN 1 (ADMIN_IDS[0]) ko jaati hai.
+    target = ADMIN_IDS[0] if ADMIN_IDS else (OWNER_ID or 0)
     if not target:
         return
     sc, bd = fonts.small_caps, fonts.bold
@@ -1413,6 +1480,255 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================================================
+#  MEMBER COMMANDS
+# =====================================================================
+async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(RULES_TEXT)
+
+
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kisi message par reply karke /report — admins ko DM jaata hai."""
+    msg = update.effective_message
+    r = msg.reply_to_message
+    if not r:
+        await msg.reply_text("Jis message ki report karni hai, us par reply karke /report bhejo.")
+        return
+    who = update.effective_user
+    sc, bd = fonts.small_caps, fonts.bold
+    text = (
+        f"🚩 {bd('REPORT')}\n\n"
+        f"{sc('from')} : {who.full_name} (@{who.username or '-'})\n"
+        f"{sc('id')}   : {who.id}\n"
+        f"{sc('chat')} : {msg.chat.title or 'private'} [{msg.chat.id}]\n"
+        f"{sc('msg')}  : {(r.text or r.caption or '[media]')[:300]}"
+    )
+    targets = list(ADMIN_IDS) or ([OWNER_ID] if OWNER_ID else [])
+    sent = 0
+    for a in targets:
+        try:
+            await context.bot.send_message(a, text)
+            sent += 1
+        except Exception:
+            pass
+    await msg.reply_text("Report bhej di gayi. Dhanyavaad."
+                         if sent else "Report abhi kisi admin tak nahi pahunchi.")
+
+
+# =====================================================================
+#  ADMIN / MODERATION COMMANDS  (bot ki chat permissions use karte hain)
+# =====================================================================
+#   (permission key, dikhne wala naam, iska matlab, kaunsi command)
+_PERM_MEANING = [
+    ("can_change_info",      "Change Group Info",    "group ka naam / photo badal sakta hai",     "/settitle"),
+    ("can_invite_users",     "Invite Users via Link", "invite link bana kar log jod sakta hai",   "/invitelink"),
+    ("can_restrict_members", "Ban Users",            "kisi ko group se ban / kick kar sakta hai", "/kick  /unkick"),
+    ("can_delete_messages",  "Delete Messages",      "kisi ka bhi message delete kar sakta hai",  "/del"),
+    ("can_promote_members",  "Add New Admins",       "naya admin bana sakta hai",                 "/promote"),
+    ("can_pin_messages",     "Pin Messages",         "message pin kar sakta hai",                 "/pin"),
+    ("can_manage_chat",      "Manage Chat",          "chat ko manage kar sakta hai",              ""),
+    ("can_post_messages",    "Post Messages",        "channel me post kar sakta hai",             ""),
+    ("can_edit_messages",    "Edit Messages",        "channel ka post edit kar sakta hai",        ""),
+]
+
+
+def _is_group(update) -> bool:
+    return update.effective_chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
+
+
+def _target_uid(update, context):
+    """Reply se ya pehle argument se user id nikaalo."""
+    r = update.effective_message.reply_to_message
+    if r and r.from_user:
+        return r.from_user.id
+    if context.args:
+        try:
+            return int(context.args[0])
+        except ValueError:
+            return None
+    return None
+
+
+async def _need(update, group_only=True):
+    """Admin check + chat type check. True = aage badho."""
+    if not is_privileged(update.effective_user.id):
+        return False
+    if group_only and not _is_group(update):
+        await update.effective_message.reply_text("Ye command sirf group me chalti hai.")
+        return False
+    return True
+
+
+async def cmd_settitle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Group ka naam badlo — 'Change Group Info' permission chahiye."""
+    if not await _need(update):
+        return
+    title = " ".join(context.args or []).strip()
+    if not title:
+        await update.effective_message.reply_text("Use: /settitle <naya naam>")
+        return
+    try:
+        await context.bot.set_chat_title(update.effective_chat.id, title[:128])
+        await update.effective_message.reply_text(f"Naam badal diya: {title}")
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"Fail: {_err_hint(e)}\n(Bot ko 'Change Group Info' permission chahiye.)")
+
+
+async def cmd_invitelink(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Invite link banao — 'Invite Users via Link' permission chahiye."""
+    if not is_privileged(update.effective_user.id):
+        return
+    if update.effective_chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
+        await update.effective_message.reply_text("Ye command sirf group/channel me chalti hai.")
+        return
+    try:
+        link = await context.bot.create_chat_invite_link(update.effective_chat.id, name=BOT_BRAND)
+        await update.effective_message.reply_text(
+            f"{fonts.small_caps('invite link')}:\n{link.invite_link}")
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"Fail: {_err_hint(e)}\n(Bot ko 'Invite Users' permission chahiye.)")
+
+
+async def cmd_kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User ko group se ban/kick — 'Ban Users' permission chahiye."""
+    if not await _need(update):
+        return
+    uid = _target_uid(update, context)
+    if not uid:
+        await update.effective_message.reply_text(
+            "Use: /kick <user_id>  (ya uske message par reply karke /kick)")
+        return
+    try:
+        await context.bot.ban_chat_member(update.effective_chat.id, uid)
+        await update.effective_message.reply_text(f"Kick kar diya: {uid}")
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"Fail: {_err_hint(e)}\n(Bot ko 'Ban Users' permission chahiye.)")
+
+
+async def cmd_unkick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ban hatana — 'Ban Users' permission chahiye."""
+    if not await _need(update):
+        return
+    uid = _target_uid(update, context)
+    if not uid:
+        await update.effective_message.reply_text(
+            "Use: /unkick <user_id>  (ya uske message par reply karke /unkick)")
+        return
+    try:
+        await context.bot.unban_chat_member(update.effective_chat.id, uid, only_if_banned=True)
+        await update.effective_message.reply_text(f"Ban hata diya: {uid}")
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"Fail: {_err_hint(e)}\n(Bot ko 'Ban Users' permission chahiye.)")
+
+
+async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply wala message delete — 'Delete Messages' permission chahiye."""
+    if not await _need(update):
+        return
+    msg = update.effective_message
+    r = msg.reply_to_message
+    if not r:
+        await msg.reply_text("Jis message ko delete karna hai, us par reply karke /del bhejo.")
+        return
+    try:
+        await context.bot.delete_message(r.chat_id, r.message_id)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await msg.reply_text(f"Fail: {_err_hint(e)}\n(Bot ko 'Delete Messages' permission chahiye.)")
+
+
+async def cmd_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply wala message pin — 'Pin Messages' permission chahiye."""
+    if not await _need(update):
+        return
+    msg = update.effective_message
+    r = msg.reply_to_message
+    if not r:
+        await msg.reply_text("Jis message ko pin karna hai, us par reply karke /pin bhejo.")
+        return
+    try:
+        await context.bot.pin_chat_message(r.chat_id, r.message_id, disable_notification=True)
+        await msg.reply_text("Pin kar diya.")
+    except Exception as e:
+        await msg.reply_text(f"Fail: {_err_hint(e)}\n(Bot ko 'Pin Messages' permission chahiye.)")
+
+
+async def cmd_promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Naya admin banao (group me) — 'Add New Admins' permission chahiye."""
+    if not await _need(update):
+        return
+    uid = _target_uid(update, context)
+    if not uid:
+        await update.effective_message.reply_text(
+            "Use: /promote <user_id>  (ya uske message par reply karke /promote)")
+        return
+    try:
+        await context.bot.promote_chat_member(
+            update.effective_chat.id, uid,
+            can_manage_chat=True, can_delete_messages=True, can_restrict_members=True,
+            can_invite_users=True, can_pin_messages=True, can_change_info=True,
+        )
+        await update.effective_message.reply_text(f"Admin bana diya: {uid}")
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"Fail: {_err_hint(e)}\n(Bot ko 'Add New Admins' permission chahiye.)")
+
+
+async def cmd_perms(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Is chat me bot ke paas kaunsi permission hai — matlab + command ke saath."""
+    if not is_privileged(update.effective_user.id):
+        return
+    chat = update.effective_chat
+    me = await _get_me(context)
+    sc, bd = fonts.small_caps, fonts.bold
+    try:
+        m = await context.bot.get_chat_member(chat_id=chat.id, user_id=me.id)
+    except Exception as e:
+        await update.effective_message.reply_text(f"Check fail: {_err_hint(e)}")
+        return
+    out = [bd("BOT PERMISSIONS"), "",
+           f"{sc('chat')} : {chat.title or 'private'}",
+           f"{sc('role')} : {bd(m.status)}", ""]
+    if m.status not in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+        out.append("Bot is chat me ADMIN nahi hai — koi permission nahi.")
+    else:
+        for key, label, meaning, cmd in _PERM_MEANING:
+            have = bool(getattr(m, key, False))
+            out.append(f"{'✅' if have else '❌'} {bd(label)}")
+            out.append(f"   {meaning}")
+            if have and cmd:
+                out.append(f"   {sc('cmd')}: {cmd}")
+    await _send_long(update.effective_message, "\n".join(out))
+
+
+async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner + admins ki list."""
+    if not is_privileged(update.effective_user.id):
+        return
+    sc, bd = fonts.small_caps, fonts.bold
+    out = [bd("TEAM"), ""]
+    if OWNER_ID:
+        out.append(f"👑 {bd('Owner')} : {OWNER_NAME or 'Owner'}")
+        out.append(f"   {sc('id')} : {OWNER_ID}")
+    for a in ADMIN_IDS:
+        out.append(f"🛡 {bd(admin_label(a))}")
+        out.append(f"   {sc('id')} : {a}")
+    if not ADMIN_IDS:
+        out.append("Koi admin set nahi hai — Render me ADMIN_IDS daalo.")
+    out.append("")
+    out.append(f"{sc('owner')} : 100% power (sab kuch)")
+    out.append(f"{sc('admin')} : moderation + management")
+    out.append(f"{sc('admin banana/hatana')} : sirf owner")
+    await _send_long(update.effective_message, "\n".join(out))
+
+
+# =====================================================================
 #  BUILD APPLICATION
 # =====================================================================
 def build_application() -> Application:
@@ -1435,6 +1751,17 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("setid", cmd_setid))
     app.add_handler(CommandHandler("diag", cmd_diag))
     app.add_handler(CommandHandler("chats", cmd_chats))
+    app.add_handler(CommandHandler("rules", cmd_rules))
+    app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("perms", cmd_perms))
+    app.add_handler(CommandHandler("admins", cmd_admins))
+    app.add_handler(CommandHandler("settitle", cmd_settitle))
+    app.add_handler(CommandHandler("invitelink", cmd_invitelink))
+    app.add_handler(CommandHandler("kick", cmd_kick))
+    app.add_handler(CommandHandler("unkick", cmd_unkick))
+    app.add_handler(CommandHandler("del", cmd_del))
+    app.add_handler(CommandHandler("pin", cmd_pin))
+    app.add_handler(CommandHandler("promote", cmd_promote))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
