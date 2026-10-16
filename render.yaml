@@ -26,10 +26,12 @@ services:
       - key: BOT_USERNAME
         sync: false
       - key: BOT_BRAND
-        value: "Linnet"
+        value: "Ongoing"
       - key: AI_API_KEY
         sync: false
       - key: ADMIN_IDS
+        sync: false
+      - key: ADMIN_NAMES
         sync: false
       # Optional (defaults already set in config.py):
       # - key: AI_MODEL
@@ -38,3 +40,4 @@ services:
       #   value: gemini-3.5-flash-lite
       - key: JOIN_FAIL_MODE
         value: "closed"
+
