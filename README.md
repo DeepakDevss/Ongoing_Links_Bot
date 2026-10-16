@@ -183,7 +183,7 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 | Role | Who | Power |
 |---|---|---|
 | Owner | `OWNER_ID` | Everything, including adding/removing admins. Skips the force-join gate. |
-| Admin | `ADMIN_IDS` (labelled by `ADMIN_NAMES`) | Moderation and management. Cannot add/remove admins. |
+| Admin | `ADMIN_IDS` (labelled by `ADMIN_NAMES`) | Moderation and management. Cannot broadcast or issue bot-wide bans. |
 | Member | everyone else | User commands only. |
 
 `ADMIN_IDS[0]` is "Admin 1" and is the one who receives join requests.
@@ -201,6 +201,7 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 | `/id` | Your Telegram user ID |
 | `/ref` | Your referral link and invite count |
 | `/rules` | The rules text (`RULES_TEXT`) |
+| `/ai <question>` | Ask the AI directly |
 | `/report` | Reply to a message to report it to the admins |
 
 ### Admin and Owner
@@ -208,14 +209,19 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 | Command | Description |
 |---|---|
 | `/stats` | Usage and growth statistics |
-| `/broadcast` | Send a message to all known users |
-| `/ban` / `/unban` | Bot-wide ban / unban by user ID |
 | `/getid` | Look up a chat ID from a forwarded message |
 | `/setid` | Set a configured chat ID |
 | `/diag` | Gate diagnostics, plus every chat the bot is in |
 | `/chats` | Every chat the bot is in — ID, type, bot status, bound block |
 | `/perms` | The bot's permissions in this chat, what each one means, and its command |
-| `/admins` | Owner and admins |
+| `/admins` / `/list_admins` | Owner and admins |
+
+### Owner only
+
+| Command | Description |
+|---|---|
+| `/broadcast` | Send a message to all known users |
+| `/ban` / `/unban` | Bot-wide ban / unban by user ID |
 
 ### Group moderation — the bot must be an admin in that group
 

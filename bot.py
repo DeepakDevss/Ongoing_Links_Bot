@@ -824,6 +824,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     out.append("/id — apni Telegram ID")
     out.append("/ref — referral link + invite count")
     out.append("/rules — rules")
+    out.append("/ai <sawaal> — AI se seedha jawab")
     out.append("/report — kisi message par reply karke report")
     out.append("")
     out.append(f"{sc('Chat')}: DM me seedha likho. Group me {BOT_USERNAME} ko mention karo.")
@@ -833,11 +834,14 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out.append("/stats /broadcast /ban /unban /getid /setid")
         out.append("/diag /chats /perms /admins")
         out.append("/pin /del /settitle /invitelink /kick /unkick /promote")
+        out.append("/ai /list_admins")
         out.append(f"{sc('(group commands sirf group me — bot ko admin hona chahiye)')}")
     if is_owner(uid):
         out.append("")
-        out.append(bd("Owner"))
-        out.append("Aapke paas 100% power hai — saare admin commands + gate bypass.")
+        out.append(bd("Owner only"))
+        out.append("/broadcast — sab users ko message")
+        out.append("/ban /unban — bot-wide ban")
+        out.append("Aapke paas 100% power hai — gate bhi bypass.")
     await _send_long(update.effective_message, "\n".join(out))
 
 
@@ -866,7 +870,7 @@ async def cmd_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # -------- admin --------
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
+    if not is_privileged(update.effective_user.id):
         return
     s = db_stats()
     await update.effective_message.reply_text(
@@ -879,8 +883,9 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sirf un users ko bhejta hai jinhone bot ko /start kiya hai (opt-in)."""
-    if not is_admin(update.effective_user.id):
+    """Sirf un users ko bhejta hai jinhone bot ko /start kiya hai (opt-in).
+    Ye OWNER-only hai (poori list par mass DM — bada asar)."""
+    if not await _need_owner(update):
         return
     msg = update.effective_message
     if not context.args and not msg.reply_to_message:
@@ -911,7 +916,8 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
+    """Bot-wide ban — OWNER-only."""
+    if not await _need_owner(update):
         return
     if not context.args:
         await update.effective_message.reply_text("Use: /ban <user_id>")
@@ -925,7 +931,8 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
+    """Bot-wide unban — OWNER-only."""
+    if not await _need_owner(update):
         return
     if not context.args:
         await update.effective_message.reply_text("Use: /unban <user_id>")
@@ -941,7 +948,7 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: channel/group ka message bot ko FORWARD karo -> numeric id milega
     (aur seedha save bhi ho jayega — config edit karne ki zaroorat nahi)."""
-    if not is_admin(update.effective_user.id):
+    if not is_privileged(update.effective_user.id):
         return
     msg = update.effective_message
     fwd = getattr(msg, "forward_from_chat", None)
@@ -969,7 +976,7 @@ async def cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /setid <block name> <numeric id> — id yaad rakho (config edit nahi)."""
-    if not is_admin(update.effective_user.id):
+    if not is_privileged(update.effective_user.id):
         return
     args = context.args or []
     if len(args) < 2:
@@ -1032,6 +1039,9 @@ async def _send_long(message, text, limit=3800):
         return
     part = ""
     for line in text.split("\n"):
+        while len(line) > limit:          # ek hi line bahut lambi -> tod do
+            await message.reply_text(line[:limit])
+            line = line[limit:]
         if part and len(part) + len(line) + 1 > limit:
             await message.reply_text(part)
             part = line
@@ -1082,7 +1092,7 @@ async def _known_chats_lines(context, me) -> list:
 
 async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: bot jin chats me hai, unki poori list."""
-    if not is_admin(update.effective_user.id):
+    if not is_privileged(update.effective_user.id):
         return
     me = await _get_me(context)
     lines = await _known_chats_lines(context, me)
@@ -1092,7 +1102,7 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: poora status — har channel ALAG BLOCK me, spacing + font ke saath,
     aur neeche total kitne channel join karne hain wo summary."""
-    if not is_admin(update.effective_user.id):
+    if not is_privileged(update.effective_user.id):
         return
     me = await _get_me(context)
     learned = _learned_ids()
@@ -1548,6 +1558,15 @@ def _target_uid(update, context):
     return None
 
 
+async def _need_owner(update):
+    """Sirf owner — warna saaf message."""
+    if is_owner(update.effective_user.id):
+        return True
+    if is_privileged(update.effective_user.id):
+        await update.effective_message.reply_text("Sirf owner ye kar sakta hai.")
+    return False
+
+
 async def _need(update, group_only=True):
     """Admin check + chat type check. True = aage badho."""
     if not is_privileged(update.effective_user.id):
@@ -1684,6 +1703,9 @@ async def cmd_perms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Is chat me bot ke paas kaunsi permission hai — matlab + command ke saath."""
     if not is_privileged(update.effective_user.id):
         return
+    if update.effective_chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
+        await update.effective_message.reply_text("Ye command sirf group/channel me chalti hai.")
+        return
     chat = update.effective_chat
     me = await _get_me(context)
     sc, bd = fonts.small_caps, fonts.bold
@@ -1705,6 +1727,32 @@ async def cmd_perms(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if have and cmd:
                 out.append(f"   {sc('cmd')}: {cmd}")
     await _send_long(update.effective_message, "\n".join(out))
+
+
+async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/ai <sawaal> — AI se seedha jawab (gate + rate limit ke saath)."""
+    q = " ".join(context.args or []).strip()
+    if not q:
+        await update.effective_message.reply_text("Use: /ai <sawaal>")
+        return
+    uid = update.effective_user.id
+    if await needs_join(context, uid):
+        await send_join_gate(update, context)
+        return
+    if not _ai_allowed(uid):
+        await update.effective_message.reply_text(
+            f"{fonts.small_caps('Slow down')} — {fonts.small_caps('thodi der baad try karo')}.")
+        return
+    chat = update.effective_chat
+    priv = chat.type == ChatType.PRIVATE
+    mem = f"u{uid}" if priv else f"g{chat.id}:u{uid}"
+    try:
+        await context.bot.send_chat_action(chat.id, "typing")
+    except Exception:
+        pass
+    await update.effective_message.reply_text(
+        await ask_ai(q, where="a private chat" if priv else "a Telegram group",
+                     mem_key=mem, note=_owner_note(uid)))
 
 
 async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1762,6 +1810,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("del", cmd_del))
     app.add_handler(CommandHandler("pin", cmd_pin))
     app.add_handler(CommandHandler("promote", cmd_promote))
+    app.add_handler(CommandHandler("ai", cmd_ai))
+    app.add_handler(CommandHandler("list_admins", cmd_admins))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
