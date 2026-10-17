@@ -83,6 +83,9 @@ from config import (
     POST_COMMAND,
     POST_CHANNELS,
     POST_ASK_IMAGE,
+    POST_CREDIT_TEXT,
+    POST_CREDIT_URL,
+    POST_EP_LINE,
     POST_TYPES,
     POST_FIELDS,
     POST_BUTTON_TEXT,
@@ -1392,6 +1395,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data2 = dict(fl["data"])
         data2.update({"code": code, "type": fl["type"],
                       "channel_ids": list(fl.get("channels") or []),
+                      "ep_line": fl.get("ep_line"),
                       "image": fl.get("image"), "posted": False, "created": _now()})
         db_post_save(code, data2)
         ok = await _send_post(context, code)
@@ -2058,6 +2062,55 @@ def _norm_chat_id(x) -> int:
     return cid if cid < 0 else -cid
 
 
+def _esc(t) -> str:
+    """HTML parse_mode ke liye & < > escape karo."""
+    return (str(t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+async def _ep_line(p) -> str:
+    """'S03 EPISODE 01-02 ADDED' jaisi ek line — AI banata hai, warna season se."""
+    season = str(p.get("Season") or "").strip()
+    if POST_EP_LINE:
+        try:
+            t = await ask_ai(
+                f"Anime: {p.get('Name', '')}. Season: {season}. "
+                "Write one short line in exactly this style: 'S03 EPISODE 01-02 ADDED'. "
+                "Only that line, nothing else, no markdown, no quotes.",
+                mem_key=None)
+            if t and t != busy_message():
+                line = t.strip().splitlines()[0].strip().strip('"').strip()
+                if line:
+                    return line[:60]
+        except Exception:
+            pass
+    s = re.sub(r"\D", "", season)
+    return f"S{s} EPISODE ADDED" if s else "NEW EPISODE ADDED"
+
+
+def _post_caption(p, ep_line="") -> str:
+    """Post ka caption (HTML) — screenshot wala format."""
+    bd = fonts.bold
+    sep = "━━━━━━━━━━━━━━━━━"
+    out = [f"❝ {_esc(bd(str(p.get('Name') or '-')))} ❞", "", sep]
+    for k in ("Season", "Episodes", "Quality", "Language"):
+        v = p.get(k)
+        if v:
+            out.append(f"►{k} :- {_esc(str(v)[:80])}")
+    out.append(sep)
+    out.append("")
+    out.append(f'[ Creadit - <a href="{POST_CREDIT_URL}">{_esc(bd(POST_CREDIT_TEXT))}</a> ]')
+    out.append("")
+    out.append(sep)
+    if ep_line:
+        out.append(f"   {_esc(ep_line)}")
+        out.append(sep)
+    link = _as_url(p.get("Link"))
+    if link:
+        out.append(f'   ★ <a href="{_esc(link)}">WATCH &amp; DOWNLOAD</a> ★')
+        out.append(sep)
+    return "\n".join(out)
+
+
 def _post_text(p) -> str:
     sc, bd = fonts.small_caps, fonts.bold
     name = p.get("Name") or "-"
@@ -2065,7 +2118,7 @@ def _post_text(p) -> str:
     # "Link" yahan jaan-boojh kar skip hai — wo post par dikhta nahi,
     # sirf "Request to Join" button ka destination banta hai.
     skip = {"Name", "Link", "code", "type", "channel_id", "channel_ids", "channel_url",
-            "image", "posted", "posted_at", "created", "post_at"}
+            "image", "posted", "posted_at", "created", "post_at", "ep_line"}
     for k, v in p.items():
         if k in skip or not v:
             continue
@@ -2194,6 +2247,8 @@ async def _post_ask(chat_id, context, uid):
             chat_id, f"Send {fonts.bold(f)}  ({fonts.small_caps('type')} skip {fonts.small_caps('to leave it out')})")
         return
     preview = {"type": fl["type"], **fl["data"]}
+    if not fl.get("ep_line"):
+        fl["ep_line"] = await _ep_line(preview)
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🚀 Post now", callback_data="postgo:now"),
         InlineKeyboardButton("🕒 Schedule", callback_data="postgo:sched"),
@@ -2202,10 +2257,10 @@ async def _post_ask(chat_id, context, uid):
     img = "✅" if fl.get("image") else "—"
     await context.bot.send_message(
         chat_id,
-        f"{fonts.bold('PREVIEW')}\n\n{_post_text(preview)}\n\n"
-        f"{fonts.small_caps('channels')}: {chans}\n"
+        f"{fonts.bold('PREVIEW')}\n\n{_post_caption(preview, fl['ep_line'])}"
+        f"\n\n{fonts.small_caps('channels')}: {chans}\n"
         f"{fonts.small_caps('image')}: {img}",
-        reply_markup=kb)
+        reply_markup=kb, parse_mode="HTML")
 
 
 async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2236,6 +2291,7 @@ async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code = _new_code()
         data = dict(fl["data"])
         data.update({"code": code, "type": fl["type"], "channel_ids": list(fl.get("channels") or []),
+                     "ep_line": fl.get("ep_line"),
                      "image": fl.get("image"), "posted": False,
                      "created": _now(), "post_at": dt.strftime("%Y-%m-%d %H:%M")})
         db_post_save(code, data)
@@ -2287,15 +2343,17 @@ async def _send_post(context, code):
         return False
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(
         POST_BUTTON_TEXT, url=_deep_link(context, code))]])
-    cap = _post_text(p)
+    ep = p.get("ep_line") or await _ep_line(p)
+    cap = _post_caption(p, ep)[:1024]
     chans = p.get("channel_ids") or ([p["channel_id"]] if p.get("channel_id") else [])
     ok = False
     for cid in chans:
         try:
             if p.get("image"):
-                await context.bot.send_photo(cid, p["image"], caption=cap, reply_markup=kb)
+                await context.bot.send_photo(cid, p["image"], caption=cap,
+                                             reply_markup=kb, parse_mode="HTML")
             else:
-                await context.bot.send_message(cid, cap, reply_markup=kb)
+                await context.bot.send_message(cid, cap, reply_markup=kb, parse_mode="HTML")
             ok = True
         except Exception as e:
             log.warning("Post bhejne me fail (%s): %s", cid, e)

@@ -261,17 +261,43 @@ Owner and admins only. Builds a channel post whose button is a tracked deep link
 1. `/post` → pick a type (`POST_TYPES`: Anime / Movie / Series).
 2. **Pick the channels** — the buttons come from `POST_CHANNELS`. Tap to toggle (`✅`), tap as many as you want, then **➡️ Done**. The post goes to every channel you selected.
 3. **Send the banner image.** The bot reads it with AI vision and shows what it read — as a hint only, nothing is filled in for you.
-4. The bot then asks for each field in `POST_FIELDS` (Name, Season, Quality, Language, Link) one by one. Reply to each, or send `skip` to leave one out. `Link` is the join destination (see below) — it is not printed in the post.
+4. The bot then asks for each field in `POST_FIELDS` (Name, Season, Episodes, Quality, Language, Link) one by one. Reply to each, or send `skip` to leave one out. `Link` is the join destination (see below) — it is not printed in the post.
 5. Choose **Abhi post karo** (now) or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
 
-The post goes out as a **photo** (your banner) with the details as the caption and a
-**📥 Download & Watch** button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so
-when a reader taps it, their chat with the bot opens and the bot already knows which post it is.
+The post goes out as a **photo** (your banner) with a styled caption and a **📥 Download & Watch**
+button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so when a reader taps it,
+their chat with the bot opens and the bot already knows which post it is.
 
-The `Link` field is **not shown in the post**. It is used as the destination of the
-**🔔 Request to Join** button: the reader taps *Download & Watch*, the bot greets them, and that
-button opens the link you gave. If you leave `Link` empty, the bot falls back to invite links for
-the channels you selected.
+The caption looks like this (sent with `parse_mode=HTML` so the credit and the download line are
+real inline links):
+
+```
+❝ Attack On Titan ❞
+
+━━━━━━━━━━━━━━━━━
+►Season :- 03
+►Episodes :- 22
+►Quality :- 480p, 720p, 1080p, 4K [ DUAL ]
+►Language :- Hindi Dub [ #OFFICIAL ]
+━━━━━━━━━━━━━━━━━
+
+[ Creadit - Ongoing ]        <- "Ongoing" links to POST_CREDIT_URL
+
+━━━━━━━━━━━━━━━━━
+   S03 EPISODE 01-02 ADDED   <- written by the AI (POST_EP_LINE)
+━━━━━━━━━━━━━━━━━
+   ★ WATCH & DOWNLOAD ★      <- links to the Link you gave
+━━━━━━━━━━━━━━━━━
+```
+
+The `Link` field is **not printed as text**. It becomes the `WATCH & DOWNLOAD` link, and also the
+destination of the **🔔 Request to Join** button — the reader taps *Download & Watch*, the bot greets
+them, and that button opens the link you gave. If you leave `Link` empty, the bot falls back to
+invite links for the channels you selected.
+
+There is no Genre line. The episode line is written by the AI from the name and season; set
+`POST_EP_LINE=False` to build it from the season alone. Note the AI may guess episode numbers —
+check the preview before posting.
 
 `/posts` lists every post with its code and link.
 

@@ -315,7 +315,7 @@ POST_TYPES = [x.strip() for x in os.getenv("POST_TYPES", "Anime,Movie,Series").s
 
 # AI kin cheezon ka sawaal poochhega (channel uske BAAD poochha jata hai)
 POST_FIELDS = [x.strip() for x in
-               os.getenv("POST_FIELDS", "Name,Season,Quality,Language,Link").split(",") if x.strip()]
+               os.getenv("POST_FIELDS", "Name,Season,Episodes,Quality,Language,Link").split(",") if x.strip()]
 
 # Post me jo button lagta hai — ye bot ka deep link kholta hai
 POST_BUTTON_TEXT = os.getenv("POST_BUTTON_TEXT", "📥 Download & Watch")
@@ -332,6 +332,13 @@ POST_CHANNELS = [
     [("HOYOVERSE ANIMES", 1003894555958), ("WORLD NEWS",       1003910002446)],
     [("ANIME CHAT GROUP", 1002842273870)],
 ]
+
+# Post ke caption me credit line. "Ongoing" par click karne se ye link khulta hai.
+POST_CREDIT_TEXT = os.getenv("POST_CREDIT_TEXT", "Ongoing")
+POST_CREDIT_URL = os.getenv("POST_CREDIT_URL", "https://t.me/ANIME_WORLD_8BOT")
+
+# Post me "S03 EPISODE 01-02 ADDED" jaisi line AI banata hai? (False = season se)
+POST_EP_LINE = os.getenv("POST_EP_LINE", "True").lower() == "true"
 
 # /post me banner image maangni hai? (AI vision se padhi jaati hai)
 POST_ASK_IMAGE = os.getenv("POST_ASK_IMAGE", "True").lower() == "true"
