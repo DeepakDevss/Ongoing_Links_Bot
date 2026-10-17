@@ -180,13 +180,24 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 
 ## Roles
 
-| Role | Who | Power |
-|---|---|---|
-| Owner | `OWNER_ID` | Everything, including adding/removing admins. Skips the force-join gate. |
-| Admin | `ADMIN_IDS` (labelled by `ADMIN_NAMES`) | Moderation and management. Cannot broadcast or issue bot-wide bans. |
-| Member | everyone else | User commands only. |
+| Role | Who | Commands | Power |
+|---|---|---|---|
+| Owner | `OWNER_ID` | 27 | ALL permissions — every admin command plus the owner-only set. Skips the force-join gate. |
+| Admin | `ADMIN_IDS` (labelled by `ADMIN_NAMES`) | 18 | User commands plus group moderation and posting. No diagnostics, no ID/config commands, no bot-wide actions. |
+| Member | everyone else | 7 | User commands only. |
 
-`ADMIN_IDS[0]` is "Admin 1" and is the one who receives join requests.
+`/help` shows each role a flat list of only their own commands — member and admin lists
+look complete, so neither can tell that a higher tier exists. The owner's list shows every
+command, with `★` marking the owner-only ones.
+
+`ADMIN_IDS[0]` is "Admin 1" — join requests and admin-promotion approvals go to Admin 1, never to the owner.
+
+**Approvals.** Two kinds, both handled by Admin 1 (the owner can always override):
+
+- **Join request** — someone asks to join a channel/group; Admin 1 gets the details and an Approve button.
+- **Promotion** — an admin runs `/promote` in a group; Admin 1 gets an Approve button before the promotion happens. The owner's own `/promote` runs directly.
+
+`/post` needs no approval.
 
 ---
 
@@ -208,20 +219,24 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 
 | Command | Description |
 |---|---|
+| `/admins` / `/list_admins` | Team list — admins see only admins; the owner also sees the owner entry |
+| `/post` | Build a channel post with a tracked deep link |
+| `/posts` | List built posts, their code and link |
+
+### Owner only
+
+| Command | Description |
+|---|---|
 | `/stats` | Usage and growth statistics |
 | `/getid` | Look up a chat ID from a forwarded message |
 | `/setid` | Set a configured chat ID |
 | `/diag` | Gate diagnostics, plus every chat the bot is in |
 | `/chats` | Every chat the bot is in — ID, type, bot status, bound block |
 | `/perms` | The bot's permissions in this chat, what each one means, and its command |
-| `/admins` / `/list_admins` | Owner and admins |
-
-### Owner only
-
-| Command | Description |
-|---|---|
 | `/broadcast` | Send a message to all known users |
 | `/ban` / `/unban` | Bot-wide ban / unban by user ID |
+
+An admin who sends an owner-only command gets *"Sirf owner ye kar sakta hai."*
 
 ### Group moderation — the bot must be an admin in that group
 
@@ -232,9 +247,34 @@ Refer to `config.py` for the exact variable names, accepted values, and inline c
 | `/kick` / `/unkick` | Ban Users | Bans / unbans a member |
 | `/del` | Delete Messages | Deletes the replied-to message |
 | `/pin` | Pin Messages | Pins the replied-to message |
-| `/promote` | Add New Admins | Promotes a member to admin |
+| `/promote` | Add New Admins | Promotes a member to admin (admin's request goes to Admin 1 for approval) |
 
 Reply to a member's message, or pass a user ID as the argument.
+
+---
+
+## Post builder — `/post`
+
+Owner and admins only. Builds a channel post whose button is a tracked deep link.
+
+1. `/post` → pick a type (`POST_TYPES`: Anime / Movie / Series).
+2. The bot asks for each field in `POST_FIELDS` (Name, Season, Quality, Language). Reply, or send `skip` to leave one out.
+3. Send the channel — a public link (`https://t.me/ChannelName`) or the number of a chat the bot is an admin in.
+4. Choose **Abhi post karo** (now) or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
+
+The bot posts to that channel with a **📥 Download** button. The button is a deep link —
+`https://t.me/<bot>?start=p<code>` — so when a reader taps it, their chat with the bot opens
+and the bot already knows which post and which channel they came from. It replies with a short
+line plus a **🔔 Request to Join** button that takes them to that channel.
+
+`/posts` lists every post with its code and link.
+
+**Two limits worth knowing.** The bot can only post to a chat where it is an admin. And on a
+free Render instance the service sleeps when idle, so a scheduled post may fire late — keep the
+service awake (a cron ping to `/health`) or post immediately.
+
+`POST_COMMAND` renames the command; `POST_BUTTON_TEXT` and `JOIN_BUTTON_TEXT` change the button
+labels.
 
 ---
 

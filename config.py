@@ -283,6 +283,9 @@ _DEFAULT_SYSTEM_PROMPT = (
     "most one emoji, and usually none.\n"
     "- Never invent facts, links, or numbers. If you are unsure, say so plainly.\n"
     "- Politely refuse harmful, illegal, or unsafe requests, briefly.\n"
+    "- NEVER use Markdown. Do not use *, **, _, `, # or ~~ anywhere. Telegram "
+    "shows them as plain characters, so the text looks broken. Write plain "
+    "text and use line breaks or CAPITALS for emphasis instead.\n"
     "- Do not advertise or link to any other AI tool or assistant."
 )
 AI_SYSTEM_PROMPT = os.getenv("AI_SYSTEM_PROMPT", _DEFAULT_SYSTEM_PROMPT)
@@ -301,3 +304,23 @@ AI_BUSY_MESSAGE = os.getenv("AI_BUSY_MESSAGE", (
     "Aap thodi der baad dobara bhejein — ya seedha AI se baat karein ({ai_link}), "
     "wo mere se bhi zyada powerful hai."
 ))
+
+
+# ---------------------------------------------------------------------
+# #9  /POST  (post builder — sirf Owner/Admin)
+# ---------------------------------------------------------------------
+# Command ka naam (badalna ho to yahan badlo). Default "post".
+POST_COMMAND = os.getenv("POST_COMMAND", "post").lstrip("/")
+
+# Post ke type buttons (jo /post par dikhte hain)
+POST_TYPES = [x.strip() for x in os.getenv("POST_TYPES", "Anime,Movie,Series").split(",") if x.strip()]
+
+# AI kin cheezon ka sawaal poochhega (channel uske BAAD poochha jata hai)
+POST_FIELDS = [x.strip() for x in
+               os.getenv("POST_FIELDS", "Name,Season,Quality,Language").split(",") if x.strip()]
+
+# Post me jo button lagta hai — ye bot ka deep link kholta hai
+POST_BUTTON_TEXT = os.getenv("POST_BUTTON_TEXT", "📥 Download")
+
+# Deep link se aane wale user ko jo button dikhta hai (us channel ka link)
+JOIN_BUTTON_TEXT = os.getenv("JOIN_BUTTON_TEXT", "🔔 Request to Join")

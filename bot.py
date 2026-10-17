@@ -34,7 +34,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from telegram import (
     Update,
@@ -80,6 +80,11 @@ from config import (
     admin_label,
     RULES_TEXT,
     NOTIFY_OWNER,
+    POST_COMMAND,
+    POST_TYPES,
+    POST_FIELDS,
+    POST_BUTTON_TEXT,
+    JOIN_BUTTON_TEXT,
     GATE_MESSAGE,
     GATE_BUTTON_TEXT,
     JOIN_PROMPT,
@@ -384,6 +389,28 @@ def _hist_add(mem_key, role, text):
     _prune(_history, _HISTORY_CHATS)
 
 
+_MD_PAIRS = [
+    (re.compile(r"\*\*(.+?)\*\*", re.S), r"\1"),
+    (re.compile(r"~~(.+?)~~", re.S), r"\1"),
+    (re.compile(r"`+([^`]+)`+"), r"\1"),
+    (re.compile(r"\*(.+?)\*", re.S), r"\1"),
+    (re.compile(r"^\s{0,3}#{1,6}\s*", re.M), ""),
+]
+
+
+def _strip_md(t: str) -> str:
+    """AI ke jawab se markdown hata do. Bot parse_mode use nahi karta, isliye
+    * aur ` seedhe dikhte hain (user ko ganda lagta hai)."""
+    if not t:
+        return t or ""
+    for rx, rp in _MD_PAIRS:
+        t = rx.sub(rp, t)
+    t = t.replace("**", "").replace("`", "")
+    # bache hue * hatao, par "2*3" jaisa kuch bacha rahe
+    t = re.sub(r"(?<!\d)\*(?!\d)", "", t)
+    return t.strip()
+
+
 def _run_ai(model: str, prompt: str, history=None) -> str:
     client = _get_ai()
     contents = []
@@ -430,6 +457,7 @@ async def ask_ai(prompt: str, lite: bool = False, where: str = "", mem_key=None,
             try:
                 text = await asyncio.to_thread(_run_ai, model, prompt, history)
                 if text:
+                    text = _strip_md(text)      # markdown hatao (* aur ` )
                     if len(text) > AI_MAX_CHARS:
                         text = text[: AI_MAX_CHARS - 20].rstrip() + "\n\n… (shortened)"
                     if mem_key is not None:
@@ -781,6 +809,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # /post ka deep link: /start p<code>
+    if context.args and context.args[0].startswith("p"):
+        p = db_post_get(context.args[0][1:])
+        if p:
+            await _post_welcome(update, context, p)
+            return
+
     # Referral: /start ref_12345
     if context.args:
         arg = context.args[0]
@@ -813,36 +848,67 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# (command, short description, min role)   role: member | admin | owner
+# POSTCMD = POST_COMMAND ka placeholder (naam config se aata hai).
+_COMMANDS = [
+    ("start",       "bot start / force-join gate",                 "member"),
+    ("help",        "ye message",                                  "member"),
+    ("id",          "apni Telegram ID",                            "member"),
+    ("ref",         "referral link + invite count",                "member"),
+    ("rules",       "rules dekho",                                 "member"),
+    ("ai",          "AI se seedha jawab:  /ai <sawaal>",           "member"),
+    ("report",      "kisi message par reply karke report",         "member"),
+    ("stats",       "bot ki statistics",                           "owner"),
+    ("getid",       "chat ki ID nikaalo (message forward karke)",  "owner"),
+    ("setid",       "block ki ID set karo:  /setid <block> <id>",  "owner"),
+    ("diag",        "gate + chats ka poora status",                "owner"),
+    ("chats",       "bot jin chats me hai, unki list",             "owner"),
+    ("perms",       "is chat me bot ki permissions + matlab",      "owner"),
+    ("admins",      "team ki list",                               "admin"),
+    ("list_admins", "same as /admins",                             "admin"),
+    ("settitle",    "group ka naam badlo:  /settitle <naam>",      "admin"),
+    ("invitelink",  "chat ka invite link banao",                   "admin"),
+    ("kick",        "member ko kick/ban:  /kick <user_id>",        "admin"),
+    ("unkick",      "kick/ban hatao:  /unkick <user_id>",          "admin"),
+    ("del",         "reply wala message delete karo",              "admin"),
+    ("pin",         "reply wala message pin karo",                 "admin"),
+    ("promote",     "member ko admin banao:  /promote <user_id>",  "admin"),
+    ("POSTCMD",     "naya post banao (deep link ke saath)",        "admin"),
+    ("posts",       "bane hue posts ki list",                      "admin"),
+    ("broadcast",   "sab users ko message bhejo",                  "owner"),
+    ("ban",         "bot-wide ban:  /ban <user_id>",               "owner"),
+    ("unban",       "ban hatao:  /unban <user_id>",                "owner"),
+]
+
+
+def _help_rows(want):
+    return [((POST_COMMAND if c == "POSTCMD" else c), d)
+            for c, d, r in _COMMANDS if r == want]
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Role ke hisaab se commands — Member / Admin / Owner."""
+    """Role ke hisaab se commands — FLAT list, koi tier label nahi.
+    Isse member/admin ko pata nahi chalta ki unke paas kam commands hain;
+    unki list poori lagti hai. Owner ko sab dikhta hai (★ = sirf owner)."""
     uid = update.effective_user.id
     sc, bd = fonts.small_caps, fonts.bold
-    out = [bd("HELP"), "", f"{sc('you are')} : {bd(role_of(uid))}", ""]
-    out.append(bd("Everyone"))
-    out.append("/start — bot start / force-join gate")
-    out.append("/help — ye message")
-    out.append("/id — apni Telegram ID")
-    out.append("/ref — referral link + invite count")
-    out.append("/rules — rules")
-    out.append("/ai <sawaal> — AI se seedha jawab")
-    out.append("/report — kisi message par reply karke report")
+    lvl = 2 if is_owner(uid) else (1 if is_admin(uid) else 0)
+    rank = {"member": 0, "admin": 1, "owner": 2}
+    out = [bd("COMMANDS"), ""]
+    for c, d, r in _COMMANDS:
+        if rank[r] > lvl:
+            continue
+        name = POST_COMMAND if c == "POSTCMD" else c
+        star = "★ " if (lvl == 2 and rank[r] == 2) else ""
+        out.append(f"{star}/{name} — {d}")
     out.append("")
-    out.append(f"{sc('Chat')}: DM me seedha likho. Group me {BOT_USERNAME} ko mention karo.")
-    if is_privileged(uid):
+    out.append(f"{sc('chat')}: DM me seedha likho. Group me {BOT_USERNAME} ko mention karo.")
+    if lvl >= 1:
+        out.append(f"{sc('group commands sirf group me — bot ko wahan admin hona chahiye')}")
+    if lvl == 2:
         out.append("")
-        out.append(bd("Admin"))
-        out.append("/stats /broadcast /ban /unban /getid /setid")
-        out.append("/diag /chats /perms /admins")
-        out.append("/pin /del /settitle /invitelink /kick /unkick /promote")
-        out.append("/ai /list_admins")
-        out.append(f"{sc('(group commands sirf group me — bot ko admin hona chahiye)')}")
-    if is_owner(uid):
-        out.append("")
-        out.append(bd("Owner only"))
-        out.append("/broadcast — sab users ko message")
-        out.append("/ban /unban — bot-wide ban")
-        out.append("Aapke paas 100% power hai — gate bhi bypass.")
-    await _send_long(update.effective_message, "\n".join(out))
+        out.append(f"{sc('★ = sirf owner')}  •  {sc('aapke paas sabhi permissions hain')}")
+    await _send_long(update.effective_message, "\n".join(out).strip())
 
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -870,7 +936,7 @@ async def cmd_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # -------- admin --------
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_privileged(update.effective_user.id):
+    if not await _need_owner(update):
         return
     s = db_stats()
     await update.effective_message.reply_text(
@@ -948,7 +1014,7 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: channel/group ka message bot ko FORWARD karo -> numeric id milega
     (aur seedha save bhi ho jayega — config edit karne ki zaroorat nahi)."""
-    if not is_privileged(update.effective_user.id):
+    if not await _need_owner(update):
         return
     msg = update.effective_message
     fwd = getattr(msg, "forward_from_chat", None)
@@ -976,7 +1042,7 @@ async def cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /setid <block name> <numeric id> — id yaad rakho (config edit nahi)."""
-    if not is_privileged(update.effective_user.id):
+    if not await _need_owner(update):
         return
     args = context.args or []
     if len(args) < 2:
@@ -1092,7 +1158,7 @@ async def _known_chats_lines(context, me) -> list:
 
 async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: bot jin chats me hai, unki poori list."""
-    if not is_privileged(update.effective_user.id):
+    if not await _need_owner(update):
         return
     me = await _get_me(context)
     lines = await _known_chats_lines(context, me)
@@ -1102,7 +1168,7 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: poora status — har channel ALAG BLOCK me, spacing + font ke saath,
     aur neeche total kitne channel join karne hain wo summary."""
-    if not is_privileged(update.effective_user.id):
+    if not await _need_owner(update):
         return
     me = await _get_me(context)
     learned = _learned_ids()
@@ -1216,6 +1282,69 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.warning("Join approve fail: %s", e)
             await q.answer(f"Approve fail: {e}", show_alert=True)
+        return
+
+    if data.startswith("promo_ok:"):
+        approver = ADMIN_IDS[0] if ADMIN_IDS else 0
+        if not (user.id == approver or is_owner(user.id)):
+            await q.answer("Sirf Admin 1 (ya owner) approve kar sakta hai.", show_alert=True)
+            return
+        try:
+            _, cid, tuid = data.split(":")
+            await context.bot.promote_chat_member(
+                int(cid), int(tuid),
+                can_manage_chat=True, can_delete_messages=True, can_restrict_members=True,
+                can_invite_users=True, can_pin_messages=True, can_change_info=True)
+            await q.answer("Approved")
+            try:
+                await q.edit_message_text((q.message.text or "") + "\n\n✅ APPROVED")
+            except Exception:
+                pass
+        except Exception as e:
+            log.warning("Promote approve fail: %s", e)
+            await q.answer(f"Fail: {_err_hint(e)}", show_alert=True)
+        return
+
+    if data.startswith("posttype:"):
+        if not is_privileged(user.id):
+            await q.answer()
+            return
+        t = data.split(":", 1)[1]
+        _post_flow[user.id] = {"type": t, "step": 0, "data": {}}
+        await q.answer()
+        try:
+            await q.edit_message_text(f"{t} — chalo shuru karein.")
+        except Exception:
+            pass
+        await _post_ask(update.effective_chat.id, context, user.id)
+        return
+
+    if data.startswith("postgo:"):
+        if not is_privileged(user.id):
+            await q.answer()
+            return
+        fl = _post_flow.get(user.id)
+        if not fl or "channel_id" not in fl:
+            await q.answer("Flow khatam ho gaya — /post dobara bhejo.", show_alert=True)
+            return
+        await q.answer()
+        if data.split(":", 1)[1] == "sched":
+            fl["await_time"] = True
+            await context.bot.send_message(
+                update.effective_chat.id,
+                "Kab post karni hai? Aise likho:\n2026-10-18 20:30   (ya sirf 20:30 — IST)")
+            return
+        code = _new_code()
+        data2 = dict(fl["data"])
+        data2.update({"code": code, "type": fl["type"], "channel_id": fl["channel_id"],
+                      "channel_url": fl["channel_url"], "posted": False, "created": _now()})
+        db_post_save(code, data2)
+        ok = await _send_post(context, code)
+        _post_flow.pop(user.id, None)
+        await context.bot.send_message(
+            update.effective_chat.id,
+            ("Post ho gaya ✅\n" if ok else "Post bhejne me fail hua (bot us channel me admin hai?)\n")
+            + f"Link: {_deep_link(context, code)}")
         return
 
     if data != "check_join":
@@ -1427,6 +1556,9 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     db_add_user(user)
     if db_is_banned(user.id):
+        return
+    if user.id in _post_flow:
+        await _post_step(update, context)
         return
     if await needs_join(context, user.id):
         await send_join_gate(update, context)
@@ -1687,6 +1819,29 @@ async def cmd_promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(
             "Use: /promote <user_id>  (ya uske message par reply karke /promote)")
         return
+    chat = update.effective_chat
+    # Admin ka /promote -> pehle ADMIN 1 ki approval. Owner seedha kar sakta hai.
+    if not is_owner(update.effective_user.id):
+        approver = ADMIN_IDS[0] if ADMIN_IDS else 0
+        if approver and approver != update.effective_user.id:
+            sc, bd = fonts.small_caps, fonts.bold
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+                "✅ Approve", callback_data=f"promo_ok:{chat.id}:{uid}")]])
+            try:
+                await context.bot.send_message(
+                    approver,
+                    f"{bd('NEW ADMIN REQUEST')}\n\n"
+                    f"{sc('chat')} : {chat.title or chat.id}\n"
+                    f"{sc('by')}   : {update.effective_user.full_name}\n"
+                    f"{sc('user')} : {uid}\n\n"
+                    f"{sc('approve karne par promote chala jayega')}",
+                    reply_markup=kb)
+                await update.effective_message.reply_text(
+                    "Approval ke liye Admin 1 ko bhej diya.")
+            except Exception as e:
+                await update.effective_message.reply_text(
+                    f"Approval bhejne me fail: {_err_hint(e)}")
+            return
     try:
         await context.bot.promote_chat_member(
             update.effective_chat.id, uid,
@@ -1701,7 +1856,7 @@ async def cmd_promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_perms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Is chat me bot ke paas kaunsi permission hai — matlab + command ke saath."""
-    if not is_privileged(update.effective_user.id):
+    if not await _need_owner(update):
         return
     if update.effective_chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
         await update.effective_message.reply_text("Ye command sirf group/channel me chalti hai.")
@@ -1756,23 +1911,321 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner + admins ki list."""
+    """Owner -> owner + admins. Admin -> sirf admins (owner ki id nahi dikhti)."""
     if not is_privileged(update.effective_user.id):
         return
+    viewer = update.effective_user.id
     sc, bd = fonts.small_caps, fonts.bold
     out = [bd("TEAM"), ""]
-    if OWNER_ID:
+    if is_owner(viewer) and OWNER_ID:
         out.append(f"👑 {bd('Owner')} : {OWNER_NAME or 'Owner'}")
         out.append(f"   {sc('id')} : {OWNER_ID}")
+        out.append("")
+    shown = 0
     for a in ADMIN_IDS:
+        if not is_owner(viewer) and a == OWNER_ID:
+            continue          # admin ko owner ki id nahi dikhani
         out.append(f"🛡 {bd(admin_label(a))}")
         out.append(f"   {sc('id')} : {a}")
-    if not ADMIN_IDS:
+        shown += 1
+    if not shown:
         out.append("Koi admin set nahi hai — Render me ADMIN_IDS daalo.")
-    out.append("")
-    out.append(f"{sc('owner')} : 100% power (sab kuch)")
-    out.append(f"{sc('admin')} : moderation + management")
-    out.append(f"{sc('admin banana/hatana')} : sirf owner")
+    await _send_long(update.effective_message, "\n".join(out))
+
+
+# =====================================================================
+#  /POST  —  post builder (Owner/Admin) + deep-link tracking
+# =====================================================================
+#   Flow:  /post -> type chuno (Anime/Movie/Series) -> AI ek-ek sawaal
+#          poochhta hai (POST_FIELDS) -> channel link/number -> abhi ya
+#          schedule -> channel par post (button = bot ka deep link).
+#   User jab wo button dabata hai -> bot chat khulta hai -> bot ko pata
+#   chalta hai kaunsa post + kaunsa channel -> 1-2 line text + "Request
+#   to Join" button (us channel ka link).
+# ---------------------------------------------------------------------
+_post_flow: dict = {}      # user_id -> {"type","step","data","channel_id","channel_url","await_time"}
+
+
+def db_post_save(code, data):
+    with _db_lock:
+        d = _db_load()
+        d.setdefault("posts", {})[code] = data
+        _db_save(d)
+
+
+def db_post_get(code):
+    with _db_lock:
+        return _db_load().get("posts", {}).get(code)
+
+
+def db_post_all():
+    with _db_lock:
+        return dict(_db_load().get("posts", {}))
+
+
+def db_post_update(code, **kw):
+    with _db_lock:
+        d = _db_load()
+        p = d.setdefault("posts", {}).get(code)
+        if not p:
+            return False
+        p.update(kw)
+        _db_save(d)
+        return True
+
+
+def _new_code() -> str:
+    return secrets.token_urlsafe(9).replace("-", "").replace("_", "")[:10]
+
+
+def _deep_link(context, code) -> str:
+    return f"https://t.me/{context.bot.username}?start=p{code}"
+
+
+def _post_text(p) -> str:
+    sc, bd = fonts.small_caps, fonts.bold
+    name = p.get("Name") or "-"
+    out = [f"{bd(str(p.get('type', 'Post')))}  —  {bd(name)}"]
+    for k, v in p.items():
+        if k in ("Name", "code", "type", "channel_id", "channel_url", "posted",
+                 "posted_at", "created", "post_at") or not v:
+            continue
+        out.append(f"{sc(str(k))}: {bd(str(v))}")
+    return "\n".join(out)
+
+
+def _parse_when(txt):
+    """'YYYY-MM-DD HH:MM' ya 'HH:MM' (IST) -> aware datetime (IST)."""
+    txt = (txt or "").strip()
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(ist)
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}$", txt):
+            dt = datetime.strptime(txt, "%Y-%m-%d %H:%M").replace(tzinfo=ist)
+        elif re.match(r"^\d{1,2}:\d{2}$", txt):
+            h, m = (int(x) for x in txt.split(":"))
+            dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if dt <= now:
+                dt += timedelta(days=1)
+        else:
+            return None
+        return dt if dt > now else None
+    except Exception:
+        return None
+
+
+async def _channel_join_url(context, chat_id):
+    """Us channel ka aisa link jise user join kar sake (public naam ya invite link)."""
+    try:
+        ch = await context.bot.get_chat(chat_id)
+        if getattr(ch, "username", None):
+            return f"https://t.me/{ch.username}"
+    except Exception:
+        pass
+    try:
+        link = await context.bot.create_chat_invite_link(chat_id, name=BOT_BRAND[:32])
+        return link.invite_link
+    except Exception:
+        return None
+
+
+async def _known_channels(context, me):
+    """Bot jin chats me ADMIN hai (ya channel hai) — list."""
+    out = []
+    for _k, c in db_get_chats().items():
+        try:
+            m = await context.bot.get_chat_member(chat_id=c["id"], user_id=me.id)
+            if m.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+                out.append(c)
+        except Exception:
+            pass
+    return sorted(out, key=lambda c: c.get("title", "").lower())
+
+
+async def _resolve_channel(update, context, txt):
+    """Number (known list) ya t.me/<username> se channel nikalo."""
+    txt = (txt or "").strip()
+    if txt.isdigit():
+        me = await _get_me(context)
+        lst = await _known_channels(context, me)
+        n = int(txt) - 1
+        if 0 <= n < len(lst):
+            c = lst[n]
+            return c["id"], await _channel_join_url(context, c["id"]), c.get("title", "")
+        return None, None, None
+    m = re.search(r"t\.me/(?!\+)([A-Za-z0-9_]{4,})", txt)
+    if m:
+        try:
+            ch = await context.bot.get_chat("@" + m.group(1))
+            url = f"https://t.me/{m.group(1)}"
+            return ch.id, url, getattr(ch, "title", m.group(1))
+        except Exception:
+            return None, None, None
+    return None, None, None
+
+
+async def _post_ask(chat_id, context, uid):
+    """Flow ka agla sawaal bhejo."""
+    fl = _post_flow.get(uid)
+    if not fl:
+        return
+    i = fl["step"]
+    if i < len(POST_FIELDS):
+        f = POST_FIELDS[i]
+        await context.bot.send_message(
+            chat_id, f"{fonts.bold(f)} bhejo  ({fonts.small_caps('skip')} likho to chhod denge)")
+        return
+    me = await _get_me(context)
+    lst = await _known_channels(context, me)
+    lines = ["Ab channel bhejo — jahan post karni hai:",
+             "  • public link: https://t.me/ChannelName",
+             "  • ya neeche wale number me se ek:"]
+    for n, c in enumerate(lst[:15], start=1):
+        lines.append(f"   {n}) {c.get('title') or '?'}  [{c['id']}]")
+    if not lst:
+        lines.append("   (abhi koi channel yaad nahi — pehle bot ko us channel me admin banao)")
+    await context.bot.send_message(chat_id, "\n".join(lines))
+
+
+async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Post builder — sirf Owner/Admin."""
+    if not is_privileged(update.effective_user.id):
+        return
+    _post_flow.pop(update.effective_user.id, None)
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(t, callback_data=f"posttype:{t}")] for t in POST_TYPES])
+    await update.effective_message.reply_text(
+        f"{fonts.bold('Kya post karna hai?')}", reply_markup=kb)
+
+
+async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Flow ke dauraan user ka text — jawab maan lo."""
+    uid = update.effective_user.id
+    fl = _post_flow.get(uid)
+    if not fl:
+        return
+    txt = (update.effective_message.text or "").strip()
+
+    if fl.get("await_time"):
+        dt = _parse_when(txt)
+        if not dt:
+            await update.effective_message.reply_text(
+                "Samajh nahi aaya. Aise likho:  2026-10-18 20:30   (ya sirf 20:30 — IST)")
+            return
+        fl.pop("await_time", None)
+        code = _new_code()
+        data = dict(fl["data"])
+        data.update({"code": code, "type": fl["type"], "channel_id": fl["channel_id"],
+                     "channel_url": fl["channel_url"], "posted": False,
+                     "created": _now(), "post_at": dt.strftime("%Y-%m-%d %H:%M")})
+        db_post_save(code, data)
+        jq = getattr(context.application, "job_queue", None)
+        if jq is None:
+            await update.effective_message.reply_text(
+                "Scheduling available nahi hai (job-queue install nahi). Abhi post kar raha hoon.")
+            await _send_post(context, code)
+        else:
+            jq.run_once(_job_post, when=dt, data=code, name=f"post:{code}")
+            await update.effective_message.reply_text(
+                f"Schedule ho gaya: {dt.strftime('%Y-%m-%d %H:%M')} IST\nCode: {code}")
+        _post_flow.pop(uid, None)
+        return
+
+    i = fl["step"]
+    if i < len(POST_FIELDS):
+        fl["data"][POST_FIELDS[i]] = "" if txt.lower() == "skip" else txt
+        fl["step"] += 1
+        await _post_ask(update.effective_chat.id, context, uid)
+        return
+
+    cid, url, title = await _resolve_channel(update, context, txt)
+    if not cid:
+        await update.effective_message.reply_text(
+            "Ye channel nahi mila. Public link (https://t.me/xxxx) ya list ka number bhejo.")
+        return
+    fl["channel_id"], fl["channel_url"] = cid, url
+    fl["step"] += 1
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🚀 Abhi post karo", callback_data="postgo:now"),
+        InlineKeyboardButton("🕒 Schedule", callback_data="postgo:sched"),
+    ]])
+    preview = {"type": fl["type"], **fl["data"]}
+    await update.effective_message.reply_text(
+        f"{fonts.bold('PREVIEW')}\n\n{_post_text(preview)}"
+        f"\n\n{fonts.small_caps('channel')}: {title} [{cid}]",
+        reply_markup=kb)
+
+
+async def _send_post(context, code):
+    p = db_post_get(code)
+    if not p:
+        return False
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+        POST_BUTTON_TEXT, url=_deep_link(context, code))]])
+    try:
+        await context.bot.send_message(p["channel_id"], _post_text(p), reply_markup=kb)
+    except Exception as e:
+        log.warning("Post bhejne me fail (%s): %s", p.get("channel_id"), e)
+        return False
+    db_post_update(code, posted=True, posted_at=_now())
+    return True
+
+
+async def _job_post(context: ContextTypes.DEFAULT_TYPE):
+    code = context.job.data
+    ok = await _send_post(context, code)
+    await _notify_owner(context.bot, f"Scheduled post {'bhej di' if ok else 'FAIL'}: {code}")
+
+
+async def _rearm_posts(app):
+    """Restart ke baad pending scheduled posts dobara set karo."""
+    jq = getattr(app, "job_queue", None)
+    if jq is None:
+        return
+    for code, p in db_post_all().items():
+        if p.get("post_at") and not p.get("posted"):
+            dt = _parse_when(p["post_at"])
+            if dt:
+                jq.run_once(_job_post, when=dt, data=code, name=f"post:{code}")
+                log.info("Re-armed scheduled post %s at %s", code, dt)
+
+
+async def _post_welcome(update, context, p):
+    """Deep link se aaya user — 1-2 line text + 'Request to Join' button."""
+    name = p.get("Name") or "this"
+    prompt = (
+        f"Ek banda {p.get('type', 'post').lower()} '{name}' dekhne aaya hai. "
+        "Uske liye 1-2 line ka chhota warm welcome likho (uski bhasha me). "
+        "Koi markdown nahi, emoji kam se kam."
+    )
+    line = ""
+    try:
+        line = await ask_ai(prompt, mem_key=None)
+    except Exception:
+        line = ""
+    if not line or line == busy_message():
+        line = f"{name} ke liye ye channel join karo."
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+        JOIN_BUTTON_TEXT, url=p.get("channel_url") or "https://t.me")]])
+    await update.effective_message.reply_text(
+        f"{line}\n\n{fonts.bold(name)}", reply_markup=kb)
+
+
+async def cmd_posts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: bane hue posts ki list."""
+    if not is_privileged(update.effective_user.id):
+        return
+    allp = db_post_all()
+    if not allp:
+        await update.effective_message.reply_text("Abhi koi post nahi bani. /post se banao.")
+        return
+    sc, bd = fonts.small_caps, fonts.bold
+    out = [bd("POSTS"), ""]
+    for code, p in sorted(allp.items(), key=lambda kv: kv[1].get("created", ""), reverse=True)[:20]:
+        st = "✅ posted" if p.get("posted") else ("🕒 " + str(p.get("post_at") or "draft"))
+        out.append(f"{bd(p.get('Name') or '-')}  [{p.get('type')}]")
+        out.append(f"   {sc('code')} : {code}   {st}")
+        out.append(f"   {sc('link')} : {_deep_link(context, code)}")
     await _send_long(update.effective_message, "\n".join(out))
 
 
@@ -1812,6 +2265,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("promote", cmd_promote))
     app.add_handler(CommandHandler("ai", cmd_ai))
     app.add_handler(CommandHandler("list_admins", cmd_admins))
+    app.add_handler(CommandHandler(POST_COMMAND, cmd_post))
+    app.add_handler(CommandHandler("posts", cmd_posts))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
@@ -1848,6 +2303,7 @@ def run_webhook(app: Application):
     async def lifespan(_: FastAPI):
         await app.initialize()
         await verify_blocks_on_startup(app)
+        await _rearm_posts(app)
         await app.bot.set_webhook(
             url=f"{WEBHOOK_URL}{webhook_path}",
             allowed_updates=Update.ALL_TYPES,
@@ -1882,6 +2338,7 @@ def run_webhook(app: Application):
 
 async def _polling_post_init(app: Application):
     await verify_blocks_on_startup(app)
+    await _rearm_posts(app)
 
 
 def main():
