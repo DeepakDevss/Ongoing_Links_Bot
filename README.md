@@ -330,6 +330,8 @@ bot remembers itself — the Bot API has no way to list pending requests.
 
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
+- Colours are sent through `api_kwargs` (`_btn()` in `bot.py`), not PTB's `style=` parameter — that parameter only exists from PTB 22.7, and on older versions the colour used to disappear silently. The `api_kwargs` route works on any PTB version.
+- The startup log prints the real button payload, so you can see exactly what is being sent.
 - `MIN_JOINS_REQUIRED` sets how many of the listed chats must be joined before access is granted.
 - `JOIN_FAIL_MODE` defines what happens when the membership check can't be completed — for example, when the bot lacks permission to query membership or the Telegram API is unreachable. Two common modes are to fail open (allow access) or fail closed (deny access).
 - `/diag` reports the current state of the gate so misconfiguration can be spotted quickly.
@@ -387,7 +389,7 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Users are always blocked | `MIN_JOINS_REQUIRED` higher than the number of configured chats | Lower the value or add the missing chat IDs |
 | Join buttons show wrong chats | `LINK_BLOCKS` or chat IDs are incorrect | Re-check IDs with `/getid` and update `config.py` |
 | Data resets after deploy | Ephemeral filesystem | Attach a persistent disk and set the database path to it |
-| Buttons have no colour | `python-telegram-bot` older than 22.7, or an old Telegram client | Upload `requirements.txt` (`>=22.7`) and redeploy; button colours need a client from after 9 Feb 2026. The startup log prints `button colour: supported/NOT supported` |
+| Buttons have no colour | An old Telegram client | Run `/btnstyle` (owner only) — it sends blue/green/red buttons and prints the exact JSON the bot sends. If those are plain too, your Telegram app predates 9 Feb 2026 and needs updating |
 | Bot still behaves like an older version | `AI_SYSTEM_PROMPT` set in the environment overrides the built-in prompt | Delete `AI_SYSTEM_PROMPT` from the Render environment |
 | Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |
 

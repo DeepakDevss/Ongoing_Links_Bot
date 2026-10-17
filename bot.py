@@ -10,7 +10,7 @@
   Sirf "config.py" edit karni hai. Is file ko chhedne ki zaroorat nahi.
 
   Features:
-    1) Force-join gate (config.py ke LINK_BLOCKS se) + join requests owner ko
+    1) Force-join gate (config.py ke LINK_BLOCKS se) + join requests Admin 1 ko
     2) Welcome message (photo + styled caption)
     3) AI chat — DM mein, aur group mein sirf @mention par (membership check ke saath)
     4) Referral / invite growth system
@@ -752,21 +752,32 @@ async def needs_join(context, user_id, force=False) -> bool:
     return user_id not in _passed
 
 
-# Kya is PTB par button `style` (color) support hai? (>=22.7 chahiye)
-try:
-    InlineKeyboardButton("x", url="https://t.me", style="primary")
-    _STYLE_OK = True
-except TypeError:
-    _STYLE_OK = False
+# Kya button colour sach me payload me ja raha hai? (PTB version ki parwah nahi)
+def _style_ok() -> bool:
+    try:
+        b = InlineKeyboardButton("x", url="https://t.me", api_kwargs={"style": "primary"})
+        return b.to_dict().get("style") == "primary"
+    except Exception:
+        return False
+
+
+_STYLE_OK = _style_ok()
 
 
 def _btn(label, **kw):
-    """InlineKeyboardButton — `style` (color) support ho to lagao.
-    Purane PTB par style chupchaap drop nahi hota — log me warn karta hai."""
-    if "style" in kw and not _STYLE_OK:
-        log.warning("Button style support nahi hai (PTB purana) — color nahi aayega. "
-                    "requirements.txt me python-telegram-bot>=22.7 chahiye.")
-        kw.pop("style", None)
+    """InlineKeyboardButton + button colour.
+
+    `style` ko api_kwargs ke through bhejte hain, PTB ke `style=` param se nahi.
+    Wajah: `style=` param sirf PTB >= 22.7 me hai — purane PTB par wo TypeError
+    deta (aur colour chupchaap gayab ho jata). api_kwargs purane PTB par bhi
+    seedha payload me chala jata hai, isliye colour har version par jaata hai.
+    Values: "primary" (blue), "success" (green), "danger" (red)."""
+    style = kw.pop("style", None)
+    api_kwargs = dict(kw.pop("api_kwargs", None) or {})
+    if style:
+        api_kwargs["style"] = style
+    if api_kwargs:
+        kw["api_kwargs"] = api_kwargs
     return InlineKeyboardButton(label, **kw)
 
 
@@ -821,9 +832,15 @@ async def verify_blocks_on_startup(app: Application):
     Jo problem mile wo admin ko DM bhi bhejo — sirf log me chhodo mat."""
     log.info("PTB %s | button colour: %s | AI prompt: %s",
              telegram.__version__,
-             "supported" if _STYLE_OK else "NOT supported — upgrade python-telegram-bot to >=22.7",
+             "supported" if _STYLE_OK else "NOT supported",
              "ENV OVERRIDE (Render me AI_SYSTEM_PROMPT set hai!)"
              if AI_PROMPT_FROM_ENV else "built-in")
+    try:
+        _sample = link_keyboard(extra_rows=[
+            [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")]]).to_dict()
+        log.info("button payload jo Telegram ko ja raha hai: %s", json.dumps(_sample))
+    except Exception as e:
+        log.warning("Button payload sample fail: %s", e)
     try:
         me = await app.bot.get_me()
     except Exception as e:
@@ -928,7 +945,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # POSTCMD = POST_COMMAND ka placeholder (naam config se aata hai).
 _COMMANDS = [
     ("start",       "bot start / force-join gate",                 "member"),
-    ("help",        "ye message",                                  "member"),
+    ("help",        "this message",                                  "member"),
     ("id",          "your Telegram ID",                            "member"),
     ("ref",         "referral link + invite count",                "member"),
     ("rules",       "view the rules",                                 "member"),
@@ -951,6 +968,7 @@ _COMMANDS = [
     ("promote",     "promote a member:  /promote <user_id>",  "admin"),
     ("POSTCMD",     "build a post (with a tracked deep link)",        "admin"),
     ("posts",       "list built posts",                      "admin"),
+    ("btnstyle",    "button colour test",                     "owner"),
     ("broadcast",   "message all users",                  "owner"),
     ("ban",         "bot-wide ban:  /ban <user_id>",               "owner"),
     ("unban",       "remove a ban:  /unban <user_id>",                "owner"),
@@ -1379,6 +1397,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.warning("Promote approve fail: %s", e)
             await q.answer(f"Fail: {_err_hint(e)}", show_alert=True)
+        return
+
+    if data.startswith("bs:"):
+        await q.answer("Colour OK" if _STYLE_OK else "Style support nahi")
         return
 
     if data.startswith("posttype:"):
@@ -2019,7 +2041,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not _ai_allowed(uid):
         await update.effective_message.reply_text(
-            f"{fonts.small_caps('Slow down')} — {fonts.small_caps('thodi der baad try karo')}.")
+            f"{fonts.small_caps('Slow down')} — {fonts.small_caps('try again in a little while')}.")
         return
     chat = update.effective_chat
     priv = chat.type == ChatType.PRIVATE
@@ -2168,7 +2190,7 @@ def _post_caption(p, ep_line="", link_url="") -> str:
     if det:
         out.append("<blockquote>" + "\n".join(det) + "</blockquote>")
         out.append("")
-    out.append('<blockquote>[ Creadit - <a href="' + POST_CREDIT_URL + '">'
+    out.append('<blockquote>[ Creadit - <a href="' + _esc(POST_CREDIT_URL) + '">'
                + _esc(bd(POST_CREDIT_TEXT)) + "</a> ]</blockquote>")
     out.append("")
     if link_url:
@@ -2279,9 +2301,10 @@ def _channel_rows(sel) -> list:
         for name, cid in row:
             c = _norm_chat_id(cid)
             mark = "✅ " if c in sel else ""
-            r.append(InlineKeyboardButton(f"{mark}{name}", callback_data=f"postch:{c}"))
+            r.append(_btn(f"{mark}{name}", callback_data=f"postch:{c}",
+                          style="success" if c in sel else "primary"))
         rows.append(r)
-    rows.append([InlineKeyboardButton("➡️ Done", callback_data="postch_done")])
+    rows.append([_btn("➡️ Done", callback_data="postch_done", style="success")])
     return rows
 
 
@@ -2307,7 +2330,7 @@ async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     _post_flow.pop(update.effective_user.id, None)
     kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(t, callback_data=f"posttype:{t}")] for t in POST_TYPES])
+        [[_btn(t, callback_data=f"posttype:{t}", style="primary")] for t in POST_TYPES])
     await update.effective_message.reply_text(
         f"{fonts.bold('What are you posting?')}", reply_markup=kb)
 
@@ -2328,8 +2351,8 @@ async def _post_ask(chat_id, context, uid):
     if not fl.get("ep_line"):
         fl["ep_line"] = await _ep_line(preview)
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🚀 Post now", callback_data="postgo:now"),
-        InlineKeyboardButton("🕒 Schedule", callback_data="postgo:sched"),
+        _btn("🚀 Post now", callback_data="postgo:now", style="success"),
+        _btn("🕒 Schedule", callback_data="postgo:sched", style="primary"),
     ]])
     chans = ", ".join(str(c) for c in (fl.get("channels") or []))
     img = "✅" if fl.get("image") else "—"
@@ -2422,7 +2445,14 @@ async def _send_post(context, code):
     kb = InlineKeyboardMarkup([[_btn(
         POST_BUTTON_TEXT, url=_deep_link(context, code), style="primary")]])
     ep = p.get("ep_line") or await _ep_line(p)
-    cap = _post_caption(p, ep, _deep_link(context, code))[:1024]
+    cap = _post_caption(p, ep, _deep_link(context, code))
+    if len(cap) > 1024:                      # HTML tag kabhi beech me na kate
+        keep = []
+        for line in cap.split("\n"):
+            if len("\n".join(keep + [line])) > 1024:
+                break
+            keep.append(line)
+        cap = "\n".join(keep)
     chans = p.get("channel_ids") or ([p["channel_id"]] if p.get("channel_id") else [])
     ok = False
     for cid in chans:
@@ -2443,7 +2473,7 @@ async def _send_post(context, code):
 async def _job_post(context: ContextTypes.DEFAULT_TYPE):
     code = context.job.data
     ok = await _send_post(context, code)
-    await _notify_owner(context.bot, f"Scheduled post {'bhej di' if ok else 'FAIL'}: {code}")
+    await _notify_owner(context.bot, f"Scheduled post {'sent' if ok else 'FAILED'}: {code}")
 
 
 async def _rearm_posts(app):
@@ -2464,8 +2494,9 @@ async def _welcome_upgrade(context, msg, name, p, kb):
     Message pehle hi turant ja chuka hota hai — isliye koi delay nahi."""
     try:
         line = await ask_ai(
-            f"Ek banda {p.get('type', 'post').lower()} '{name}' dekhne aaya hai. "
-            "Write a short 1-2 line warm welcome for them (in their language). "
+            f"Someone just opened the bot to see the {p.get('type', 'post').lower()} "
+            f"'{name}'. Write a short 1-2 line warm welcome for them, in the language "
+            "of the post title if that is clear, otherwise English. "
             "No markdown, minimal emoji.", mem_key=None)
         if line and line != busy_message():
             await msg.edit_text(f"{line}\n\n{fonts.bold(name)}", reply_markup=kb)
@@ -2495,6 +2526,26 @@ async def _post_welcome(update, context, p):
         asyncio.create_task(_welcome_upgrade(context, sent, name, p, kb))
     except Exception:
         pass
+
+
+async def cmd_btnstyle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner: button colour test — 3 rangeen buttons. Agar ye rangeen dikhein to
+    sab theek hai; sab plain dikhein to Telegram app purana hai (9 Feb 2026 se
+    pehle ka)."""
+    if not is_owner(update.effective_user.id):
+        return
+    kb = InlineKeyboardMarkup([
+        [_btn("Blue — primary", callback_data="bs:p", style="primary")],
+        [_btn("Green — success", callback_data="bs:s", style="success")],
+        [_btn("Red — danger", callback_data="bs:d", style="danger")],
+    ])
+    payload = json.dumps(kb.to_dict())
+    await update.effective_message.reply_text(
+        f"{fonts.bold('Button colour test')}\n\n"
+        "Teen buttons rangeen (neela / hara / laal) dikhne chahiye.\n"
+        "Sab plain dikhe to tumhara Telegram app purana hai.\n\n"
+        f"{fonts.small_caps('ye payload bot bhej raha hai')}:\n{payload[:280]}",
+        reply_markup=kb)
 
 
 async def cmd_posts(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2553,6 +2604,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("list_admins", cmd_admins))
     app.add_handler(CommandHandler(POST_COMMAND, cmd_post))
     app.add_handler(CommandHandler("posts", cmd_posts))
+    app.add_handler(CommandHandler("btnstyle", cmd_btnstyle))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
