@@ -155,6 +155,7 @@ Other settings you may want (all optional, defaults are set in `config.py`):
 | `GATE_MESSAGE` / `GATE_BUTTON_TEXT` / `JOIN_PROMPT` | Gate text, button label, and the "join first" prompt |
 | `AI_MODEL` / `AI_MODEL_LITE` / `AI_THINKING_LEVEL` | AI model IDs and thinking level |
 | `AI_BUSY_MESSAGE` | Message shown when the AI is overloaded |
+| `POST_CHANNELS` / `POST_ASK_IMAGE` | Channel buttons for `/post`, and whether to ask for a banner |
 | `MEMBERSHIP_CACHE_TTL` | Seconds a membership result is cached |
 | `WEBHOOK_SECRET` | Optional; otherwise a random secret is generated per boot |
 
@@ -258,23 +259,25 @@ Reply to a member's message, or pass a user ID as the argument.
 Owner and admins only. Builds a channel post whose button is a tracked deep link.
 
 1. `/post` → pick a type (`POST_TYPES`: Anime / Movie / Series).
-2. The bot asks for each field in `POST_FIELDS` (Name, Season, Quality, Language). Reply, or send `skip` to leave one out.
-3. Send the channel — a public link (`https://t.me/ChannelName`) or the number of a chat the bot is an admin in.
-4. Choose **Abhi post karo** (now) or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
+2. **Pick the channels** — the buttons come from `POST_CHANNELS`. Tap to toggle (`✅`), tap as many as you want, then **➡️ Done**. The post goes to every channel you selected.
+3. **Send the banner image** (or send `skip`). The bot reads it with AI vision and pre-fills the fields it can see.
+4. The bot asks for each field in `POST_FIELDS` (Name, Season, Quality, Language) — already-filled ones are skipped. Reply, or send `skip`.
+5. Choose **Abhi post karo** (now) or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
 
-The bot posts to that channel with a **📥 Download** button. The button is a deep link —
-`https://t.me/<bot>?start=p<code>` — so when a reader taps it, their chat with the bot opens
-and the bot already knows which post and which channel they came from. It replies with a short
-line plus a **🔔 Request to Join** button that takes them to that channel.
+The post goes out as a **photo** (your banner) with the details as the caption and a **📥 Download**
+button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so when a reader taps it,
+their chat with the bot opens and the bot already knows which post and which channels it belongs to.
+It replies with a short line and a **🔔 Request to Join** button for each channel.
 
 `/posts` lists every post with its code and link.
 
-**Two limits worth knowing.** The bot can only post to a chat where it is an admin. And on a
-free Render instance the service sleeps when idle, so a scheduled post may fire late — keep the
-service awake (a cron ping to `/health`) or post immediately.
+**Three things worth knowing.** The bot can only post to a chat where it is an admin. Vision needs a
+working AI key — if it fails, the bot just skips pre-filling and asks you normally. And on a free
+Render instance the service sleeps when idle, so a scheduled post may fire late — keep the service
+awake (a cron ping to `/health`) or post immediately.
 
 `POST_COMMAND` renames the command; `POST_BUTTON_TEXT` and `JOIN_BUTTON_TEXT` change the button
-labels.
+labels; `POST_ASK_IMAGE` turns the banner step off.
 
 ---
 

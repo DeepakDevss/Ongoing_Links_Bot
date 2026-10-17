@@ -81,6 +81,8 @@ from config import (
     RULES_TEXT,
     NOTIFY_OWNER,
     POST_COMMAND,
+    POST_CHANNELS,
+    POST_ASK_IMAGE,
     POST_TYPES,
     POST_FIELDS,
     POST_BUTTON_TEXT,
@@ -1321,13 +1323,55 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer()
             return
         t = data.split(":", 1)[1]
-        _post_flow[user.id] = {"type": t, "step": 0, "data": {}}
+        _post_flow[user.id] = {"type": t, "step": 0, "data": {}, "channels": []}
         await q.answer()
         try:
             await q.edit_message_text(f"{t} — chalo shuru karein.")
         except Exception:
             pass
-        await _post_ask(update.effective_chat.id, context, user.id)
+        await _post_channel_kb(update.effective_chat.id, context, user.id)
+        return
+
+    if data.startswith("postch:"):
+        if not is_privileged(user.id):
+            await q.answer()
+            return
+        fl = _post_flow.get(user.id)
+        if not fl:
+            await q.answer("Flow khatam — /post dobara bhejo.", show_alert=True)
+            return
+        cid = int(data.split(":", 1)[1])
+        sel = fl.setdefault("channels", [])
+        if cid in sel:
+            sel.remove(cid)
+            await q.answer("Hata diya")
+        else:
+            sel.append(cid)
+            await q.answer("Chuna")
+        await _post_channel_kb(update.effective_chat.id, context, user.id, edit_msg=q.message)
+        return
+
+    if data == "postch_done":
+        if not is_privileged(user.id):
+            await q.answer()
+            return
+        fl = _post_flow.get(user.id)
+        if not fl or not fl.get("channels"):
+            await q.answer("Pehle kam se kam ek channel chuno.", show_alert=True)
+            return
+        await q.answer()
+        try:
+            await q.edit_message_text(f"Chune gaye channels: {len(fl['channels'])}")
+        except Exception:
+            pass
+        if POST_ASK_IMAGE:
+            fl["await_image"] = True
+            await context.bot.send_message(
+                update.effective_chat.id,
+                f"{fonts.bold('Banner image bhejo')}\n"
+                f"({fonts.small_caps('skip')} likho to bina image post banegi)")
+        else:
+            await _post_ask(update.effective_chat.id, context, user.id)
         return
 
     if data.startswith("postgo:"):
@@ -1335,7 +1379,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer()
             return
         fl = _post_flow.get(user.id)
-        if not fl or "channel_id" not in fl:
+        if not fl or not fl.get("channels"):
             await q.answer("Flow khatam ho gaya — /post dobara bhejo.", show_alert=True)
             return
         await q.answer()
@@ -1347,8 +1391,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         code = _new_code()
         data2 = dict(fl["data"])
-        data2.update({"code": code, "type": fl["type"], "channel_id": fl["channel_id"],
-                      "channel_url": fl["channel_url"], "posted": False, "created": _now()})
+        data2.update({"code": code, "type": fl["type"],
+                      "channel_ids": list(fl.get("channels") or []),
+                      "image": fl.get("image"), "posted": False, "created": _now()})
         db_post_save(code, data2)
         ok = await _send_post(context, code)
         _post_flow.pop(user.id, None)
@@ -1947,14 +1992,15 @@ async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================================
 #  /POST  —  post builder (Owner/Admin) + deep-link tracking
 # =====================================================================
-#   Flow:  /post -> type chuno (Anime/Movie/Series) -> AI ek-ek sawaal
-#          poochhta hai (POST_FIELDS) -> channel link/number -> abhi ya
-#          schedule -> channel par post (button = bot ka deep link).
-#   User jab wo button dabata hai -> bot chat khulta hai -> bot ko pata
-#   chalta hai kaunsa post + kaunsa channel -> 1-2 line text + "Request
-#   to Join" button (us channel ka link).
+#   Flow:  /post -> type (Anime/Movie/Series) -> CHANNEL buttons (multi-select
+#          + Done) -> banner image (AI vision se padhi jaati hai, skip bhi kar
+#          sakte ho) -> fields (POST_FIELDS) -> abhi/schedule -> post.
+#   Post us/ un channels par image + caption + "Download" button ke saath
+#   jaata hai. Button = bot ka deep link. Us par click karte hi bot chat
+#   khulta hai, bot ko pata chalta hai kaunsa post + kaunse channels, aur
+#   wo 1-2 line text + har channel ka "Request to Join" button bhejta hai.
 # ---------------------------------------------------------------------
-_post_flow: dict = {}      # user_id -> {"type","step","data","channel_id","channel_url","await_time"}
+_post_flow: dict = {}      # user_id -> {"type","step","data","channels","image","await_*"}
 
 
 def db_post_save(code, data):
@@ -1993,13 +2039,20 @@ def _deep_link(context, code) -> str:
     return f"https://t.me/{context.bot.username}?start=p{code}"
 
 
+def _norm_chat_id(x) -> int:
+    """1002549849997 -> -1002549849997 (jo config me diya hai usko theek karo)."""
+    cid = int(x)
+    return cid if cid < 0 else -cid
+
+
 def _post_text(p) -> str:
     sc, bd = fonts.small_caps, fonts.bold
     name = p.get("Name") or "-"
     out = [f"{bd(str(p.get('type', 'Post')))}  —  {bd(name)}"]
+    skip = {"Name", "code", "type", "channel_id", "channel_ids", "channel_url",
+            "image", "posted", "posted_at", "created", "post_at"}
     for k, v in p.items():
-        if k in ("Name", "code", "type", "channel_id", "channel_url", "posted",
-                 "posted_at", "created", "post_at") or not v:
+        if k in skip or not v:
             continue
         out.append(f"{sc(str(k))}: {bd(str(v))}")
     return "\n".join(out)
@@ -2026,7 +2079,7 @@ def _parse_when(txt):
 
 
 async def _channel_join_url(context, chat_id):
-    """Us channel ka aisa link jise user join kar sake (public naam ya invite link)."""
+    """Us channel ka aisa link jise user join kar sake."""
     try:
         ch = await context.bot.get_chat(chat_id)
         if getattr(ch, "username", None):
@@ -2040,62 +2093,62 @@ async def _channel_join_url(context, chat_id):
         return None
 
 
-async def _known_channels(context, me):
-    """Bot jin chats me ADMIN hai (ya channel hai) — list."""
-    out = []
-    for _k, c in db_get_chats().items():
-        try:
-            m = await context.bot.get_chat_member(chat_id=c["id"], user_id=me.id)
-            if m.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
-                out.append(c)
-        except Exception:
-            pass
-    return sorted(out, key=lambda c: c.get("title", "").lower())
+# ---------- Gemini vision (image padhna) ----------
+def _run_ai_vision(data: bytes, prompt: str) -> str:
+    client = _get_ai()
+    part = types.Part.from_bytes(data=data, mime_type="image/jpeg")
+    resp = client.models.generate_content(
+        model=AI_MODEL, contents=[part, prompt], config=_get_ai_config())
+    return (getattr(resp, "text", None) or "").strip()
 
 
-async def _resolve_channel(update, context, txt):
-    """Number (known list) ya t.me/<username> se channel nikalo."""
-    txt = (txt or "").strip()
-    if txt.isdigit():
-        me = await _get_me(context)
-        lst = await _known_channels(context, me)
-        n = int(txt) - 1
-        if 0 <= n < len(lst):
-            c = lst[n]
-            return c["id"], await _channel_join_url(context, c["id"]), c.get("title", "")
-        return None, None, None
-    m = re.search(r"t\.me/(?!\+)([A-Za-z0-9_]{4,})", txt)
-    if m:
-        try:
-            ch = await context.bot.get_chat("@" + m.group(1))
-            url = f"https://t.me/{m.group(1)}"
-            return ch.id, url, getattr(ch, "title", m.group(1))
-        except Exception:
-            return None, None, None
-    return None, None, None
+async def _vision_read(context, file_id, prompt) -> str:
+    """Telegram se image ka data laao aur AI se padhwao."""
+    try:
+        f = await context.bot.get_file(file_id)
+        data = bytes(await f.download_as_bytearray())
+        txt = await asyncio.to_thread(_run_ai_vision, data, prompt)
+        return _strip_md(txt)
+    except Exception as e:
+        log.warning("Vision fail: %s", e)
+        return ""
 
 
-async def _post_ask(chat_id, context, uid):
-    """Flow ka agla sawaal bhejo."""
+VISION_PROMPT = (
+    "Is banner image ko dekh kar sirf ye lines do (jo dikh raha hai wahi, "
+    "jo na dikhe usme ? likho). Koi extra baat nahi, koi markdown nahi:\n"
+    "Name: \nSeason: \nQuality: \nLanguage: "
+)
+
+
+# ---------- channel chunne wale buttons ----------
+def _channel_rows(sel) -> list:
+    rows = []
+    for row in POST_CHANNELS:
+        r = []
+        for name, cid in row:
+            c = _norm_chat_id(cid)
+            mark = "✅ " if c in sel else ""
+            r.append(InlineKeyboardButton(f"{mark}{name}", callback_data=f"postch:{c}"))
+        rows.append(r)
+    rows.append([InlineKeyboardButton("➡️ Done", callback_data="postch_done")])
+    return rows
+
+
+async def _post_channel_kb(chat_id, context, uid, edit_msg=None):
     fl = _post_flow.get(uid)
     if not fl:
         return
-    i = fl["step"]
-    if i < len(POST_FIELDS):
-        f = POST_FIELDS[i]
-        await context.bot.send_message(
-            chat_id, f"{fonts.bold(f)} bhejo  ({fonts.small_caps('skip')} likho to chhod denge)")
-        return
-    me = await _get_me(context)
-    lst = await _known_channels(context, me)
-    lines = ["Ab channel bhejo — jahan post karni hai:",
-             "  • public link: https://t.me/ChannelName",
-             "  • ya neeche wale number me se ek:"]
-    for n, c in enumerate(lst[:15], start=1):
-        lines.append(f"   {n}) {c.get('title') or '?'}  [{c['id']}]")
-    if not lst:
-        lines.append("   (abhi koi channel yaad nahi — pehle bot ko us channel me admin banao)")
-    await context.bot.send_message(chat_id, "\n".join(lines))
+    kb = InlineKeyboardMarkup(_channel_rows(set(fl.get("channels") or [])))
+    txt = (f"{fonts.bold('Kahan post karni hai?')}\n"
+           f"{fonts.small_caps('ek ya ek se zyada chuno, phir Done dabao')}")
+    if edit_msg is not None:
+        try:
+            await edit_msg.edit_reply_markup(kb)
+            return
+        except Exception:
+            pass
+    await context.bot.send_message(chat_id, txt, reply_markup=kb)
 
 
 async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2109,6 +2162,33 @@ async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{fonts.bold('Kya post karna hai?')}", reply_markup=kb)
 
 
+async def _post_ask(chat_id, context, uid):
+    """Flow ka agla sawaal — jo fields pehle se bhari hain unhe chhod do."""
+    fl = _post_flow.get(uid)
+    if not fl:
+        return
+    while fl["step"] < len(POST_FIELDS) and POST_FIELDS[fl["step"]] in fl["data"]:
+        fl["step"] += 1
+    if fl["step"] < len(POST_FIELDS):
+        f = POST_FIELDS[fl["step"]]
+        await context.bot.send_message(
+            chat_id, f"{fonts.bold(f)} bhejo  ({fonts.small_caps('skip')} likho to chhod denge)")
+        return
+    preview = {"type": fl["type"], **fl["data"]}
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🚀 Abhi post karo", callback_data="postgo:now"),
+        InlineKeyboardButton("🕒 Schedule", callback_data="postgo:sched"),
+    ]])
+    chans = ", ".join(str(c) for c in (fl.get("channels") or []))
+    img = "✅" if fl.get("image") else "—"
+    await context.bot.send_message(
+        chat_id,
+        f"{fonts.bold('PREVIEW')}\n\n{_post_text(preview)}\n\n"
+        f"{fonts.small_caps('channels')}: {chans}\n"
+        f"{fonts.small_caps('image')}: {img}",
+        reply_markup=kb)
+
+
 async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Flow ke dauraan user ka text — jawab maan lo."""
     uid = update.effective_user.id
@@ -2117,6 +2197,16 @@ async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     txt = (update.effective_message.text or "").strip()
 
+    # --- banner image ka intezaar ---
+    if fl.get("await_image"):
+        fl.pop("await_image", None)
+        if txt.lower() != "skip" and txt:
+            # image nahi bheji par kuch likha -> usko pehla field maan lo
+            fl["data"].setdefault(POST_FIELDS[0], txt)
+        await _post_ask(update.effective_chat.id, context, uid)
+        return
+
+    # --- schedule ka time ---
     if fl.get("await_time"):
         dt = _parse_when(txt)
         if not dt:
@@ -2126,8 +2216,8 @@ async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fl.pop("await_time", None)
         code = _new_code()
         data = dict(fl["data"])
-        data.update({"code": code, "type": fl["type"], "channel_id": fl["channel_id"],
-                     "channel_url": fl["channel_url"], "posted": False,
+        data.update({"code": code, "type": fl["type"], "channel_ids": list(fl.get("channels") or []),
+                     "image": fl.get("image"), "posted": False,
                      "created": _now(), "post_at": dt.strftime("%Y-%m-%d %H:%M")})
         db_post_save(code, data)
         jq = getattr(context.application, "job_queue", None)
@@ -2142,44 +2232,66 @@ async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _post_flow.pop(uid, None)
         return
 
-    i = fl["step"]
-    if i < len(POST_FIELDS):
-        fl["data"][POST_FIELDS[i]] = "" if txt.lower() == "skip" else txt
+    # --- normal field ---
+    if fl["step"] < len(POST_FIELDS):
+        fl["data"][POST_FIELDS[fl["step"]]] = "" if txt.lower() == "skip" else txt
         fl["step"] += 1
         await _post_ask(update.effective_chat.id, context, uid)
         return
 
-    cid, url, title = await _resolve_channel(update, context, txt)
-    if not cid:
-        await update.effective_message.reply_text(
-            "Ye channel nahi mila. Public link (https://t.me/xxxx) ya list ka number bhejo.")
+
+async def on_private_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Private chat me photo — agar /post flow chal raha hai to banner maano."""
+    user = update.effective_user
+    fl = _post_flow.get(user.id)
+    if not fl or not fl.get("await_image"):
         return
-    fl["channel_id"], fl["channel_url"] = cid, url
-    fl["step"] += 1
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🚀 Abhi post karo", callback_data="postgo:now"),
-        InlineKeyboardButton("🕒 Schedule", callback_data="postgo:sched"),
-    ]])
-    preview = {"type": fl["type"], **fl["data"]}
-    await update.effective_message.reply_text(
-        f"{fonts.bold('PREVIEW')}\n\n{_post_text(preview)}"
-        f"\n\n{fonts.small_caps('channel')}: {title} [{cid}]",
-        reply_markup=kb)
+    msg = update.effective_message
+    photos = getattr(msg, "photo", None) or []
+    if not photos:
+        return
+    fl["image"] = photos[-1].file_id
+    fl.pop("await_image", None)
+    await msg.reply_text(f"{fonts.small_caps('image mil gayi — AI se padh raha hoon')} …")
+    read = await _vision_read(context, fl["image"], VISION_PROMPT)
+    filled = []
+    if read:
+        for line in read.splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                k, v = k.strip(), v.strip()
+                if k in POST_FIELDS and v and v != "?":
+                    fl["data"][k] = v
+                    filled.append(f"{k}: {v}")
+    if filled:
+        await msg.reply_text(f"{fonts.bold('AI ne image se padha')}:\n" + "\n".join(filled))
+    elif read:
+        await msg.reply_text(f"{fonts.bold('AI ne image se padha')}:\n{read}")
+    await _post_ask(update.effective_chat.id, context, user.id)
 
 
 async def _send_post(context, code):
+    """Post bhejo — saare chune channels par, image + caption + Download button."""
     p = db_post_get(code)
     if not p:
         return False
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(
         POST_BUTTON_TEXT, url=_deep_link(context, code))]])
-    try:
-        await context.bot.send_message(p["channel_id"], _post_text(p), reply_markup=kb)
-    except Exception as e:
-        log.warning("Post bhejne me fail (%s): %s", p.get("channel_id"), e)
-        return False
-    db_post_update(code, posted=True, posted_at=_now())
-    return True
+    cap = _post_text(p)
+    chans = p.get("channel_ids") or ([p["channel_id"]] if p.get("channel_id") else [])
+    ok = False
+    for cid in chans:
+        try:
+            if p.get("image"):
+                await context.bot.send_photo(cid, p["image"], caption=cap, reply_markup=kb)
+            else:
+                await context.bot.send_message(cid, cap, reply_markup=kb)
+            ok = True
+        except Exception as e:
+            log.warning("Post bhejne me fail (%s): %s", cid, e)
+    if ok:
+        db_post_update(code, posted=True, posted_at=_now())
+    return ok
 
 
 async def _job_post(context: ContextTypes.DEFAULT_TYPE):
@@ -2202,7 +2314,7 @@ async def _rearm_posts(app):
 
 
 async def _post_welcome(update, context, p):
-    """Deep link se aaya user — 1-2 line text + 'Request to Join' button."""
+    """Deep link se aaya user — 1-2 line text + har channel ka Join button."""
     name = p.get("Name") or "this"
     prompt = (
         f"Ek banda {p.get('type', 'post').lower()} '{name}' dekhne aaya hai. "
@@ -2216,10 +2328,16 @@ async def _post_welcome(update, context, p):
         line = ""
     if not line or line == busy_message():
         line = f"{name} ke liye ye channel join karo."
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-        JOIN_BUTTON_TEXT, url=p.get("channel_url") or "https://t.me")]])
+    rows = []
+    for cid in (p.get("channel_ids") or []):
+        url = await _channel_join_url(context, cid)
+        if url:
+            rows.append([InlineKeyboardButton(JOIN_BUTTON_TEXT, url=url)])
+    if not rows:
+        rows = [[InlineKeyboardButton(
+            JOIN_BUTTON_TEXT, url=p.get("channel_url") or "https://t.me")]]
     await update.effective_message.reply_text(
-        f"{line}\n\n{fonts.bold(name)}", reply_markup=kb)
+        f"{line}\n\n{fonts.bold(name)}", reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def cmd_posts(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2286,6 +2404,7 @@ def build_application() -> Application:
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, on_group_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, on_private_message))
+    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, on_private_photo))
 
     # Group 1: jo bhi group update group 0 me handle na ho (photo, sticker,
     # command, koi bhi cheez) — sirf chat yaad rakhne ke liye. Isse bot ko

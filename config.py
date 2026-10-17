@@ -324,3 +324,16 @@ POST_BUTTON_TEXT = os.getenv("POST_BUTTON_TEXT", "📥 Download")
 
 # Deep link se aane wale user ko jo button dikhta hai (us channel ka link)
 JOIN_BUTTON_TEXT = os.getenv("JOIN_BUTTON_TEXT", "🔔 Request to Join")
+
+
+# /post me channel chunne ke buttons — (naam, chat id) ki rows.
+#   id POSITIVE do (jaise 1002549849997) — bot khud -1002549849997 bana lega.
+#   Ek hi row ke buttons saath aate hain. Chaho to badal lo.
+POST_CHANNELS = [
+    [("ANIME WORLD",      1002549849997), ("ANIME UNIVERES",   1002493856027)],
+    [("HOYOVERSE ANIMES", 1003894555958), ("WORLD NEWS",       1003910002446)],
+    [("ANIME CHAT GROUP", 1002842273870)],
+]
+
+# /post me banner image maangni hai? (AI vision se padhi jaati hai)
+POST_ASK_IMAGE = os.getenv("POST_ASK_IMAGE", "True").lower() == "true"
