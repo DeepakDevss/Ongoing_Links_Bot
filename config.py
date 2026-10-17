@@ -190,18 +190,17 @@ GATE_BUTTON_TEXT = os.getenv("GATE_BUTTON_TEXT", "✅ ᴄʜᴇᴄᴋ")
 # Rules — members /rules se dekhte hain.
 RULES_TEXT = os.getenv("RULES_TEXT", (
     "ʀᴜʟᴇs\n\n"
-    "1. Sabka respect karo — gaali, hate, kuch nahi.\n"
-    "2. Spam nahi — baar baar wahi message nahi.\n"
-    "3. Piracy / illegal links nahi.\n"
-    "4. Topic par raho.\n"
-    "5. Admin ka decision final hai.\n\n"
-    "Kuch galat lage to us message par reply karke /report bhejo."
+    "1. Respect everyone — no abuse, no hate.\n"
+    "2. No spam — don't repeat the same message.\n"
+    "3. No piracy or illegal links.\n"
+    "4. Stay on topic.\n"
+    "5. The admins' decision is final.\n\n"
+    "If something looks wrong, reply to that message with /report."
 ))
 
 # Jab user BINA join kiye Check dabata hai -> bot ye naya message bhejta hai
 # (neeche phir wahi channels + Check button aata hai).
 JOIN_PROMPT = os.getenv("JOIN_PROMPT", (
-    "Bot se baat karni hai? To pehle hamare channels join karo.\n\n"
     "Want to talk to the bot? Join our channels first."
 ))
 
@@ -300,9 +299,8 @@ AI_THINKING_LEVEL = os.getenv("AI_THINKING_LEVEL", "minimal")
 # Jab AI jawab na de paaye (server load/down) to user ko ye message jaata hai.
 # {ai_link} ki jagah "AI" block ka link khud lag jaata hai.
 AI_BUSY_MESSAGE = os.getenv("AI_BUSY_MESSAGE", (
-    "Mera server abhi load me hai, isliye is waqt jawab nahi aa paya.\n\n"
-    "Aap thodi der baad dobara bhejein — ya seedha AI se baat karein ({ai_link}), "
-    "wo mere se bhi zyada powerful hai."
+    "My server is busy right now, so I could not answer.\n\n"
+    "Please try again in a little while — or talk to the AI directly ({ai_link})."
 ))
 
 
@@ -317,7 +315,7 @@ POST_TYPES = [x.strip() for x in os.getenv("POST_TYPES", "Anime,Movie,Series").s
 
 # AI kin cheezon ka sawaal poochhega (channel uske BAAD poochha jata hai)
 POST_FIELDS = [x.strip() for x in
-               os.getenv("POST_FIELDS", "Name,Season,Quality,Language").split(",") if x.strip()]
+               os.getenv("POST_FIELDS", "Name,Season,Quality,Language,Link").split(",") if x.strip()]
 
 # Post me jo button lagta hai — ye bot ka deep link kholta hai
 POST_BUTTON_TEXT = os.getenv("POST_BUTTON_TEXT", "📥 Download")

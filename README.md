@@ -260,8 +260,8 @@ Owner and admins only. Builds a channel post whose button is a tracked deep link
 
 1. `/post` → pick a type (`POST_TYPES`: Anime / Movie / Series).
 2. **Pick the channels** — the buttons come from `POST_CHANNELS`. Tap to toggle (`✅`), tap as many as you want, then **➡️ Done**. The post goes to every channel you selected.
-3. **Send the banner image** (or send `skip`). The bot reads it with AI vision and pre-fills the fields it can see.
-4. The bot asks for each field in `POST_FIELDS` (Name, Season, Quality, Language) — already-filled ones are skipped. Reply, or send `skip`.
+3. **Send the banner image.** The bot reads it with AI vision and shows what it read — as a hint only, nothing is filled in for you.
+4. The bot then asks for each field in `POST_FIELDS` (Name, Season, Quality, Language, Link) one by one. Reply to each, or send `skip` to leave one out.
 5. Choose **Abhi post karo** (now) or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
 
 The post goes out as a **photo** (your banner) with the details as the caption and a **📥 Download**
@@ -276,8 +276,9 @@ working AI key — if it fails, the bot just skips pre-filling and asks you norm
 Render instance the service sleeps when idle, so a scheduled post may fire late — keep the service
 awake (a cron ping to `/health`) or post immediately.
 
-`POST_COMMAND` renames the command; `POST_BUTTON_TEXT` and `JOIN_BUTTON_TEXT` change the button
-labels; `POST_ASK_IMAGE` turns the banner step off.
+`POST_COMMAND` renames the command; `POST_CHANNELS` sets the channel buttons; `POST_FIELDS` sets the
+questions asked; `POST_BUTTON_TEXT` and `JOIN_BUTTON_TEXT` change the button labels; `POST_ASK_IMAGE`
+turns the banner step off.
 
 ---
 
