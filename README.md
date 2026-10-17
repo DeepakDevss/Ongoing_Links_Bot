@@ -300,7 +300,10 @@ button: the reader taps the post (or the button), the bot greets them, and that 
 link you gave.
 
 The greeting is sent **immediately** — no AI wait — so the button appears the instant the deep link
-opens. The AI-written welcome line is fetched in the background and swaps in a moment later. If you leave `Link` empty, the bot falls back to invite links for the channels you
+opens. The AI-written welcome line is fetched in the background and swaps in a moment later. That
+line is deliberately constrained: plain and respectful, no hype, no exclamation marks, no emoji, and
+no cheesy filler like "sit back and enjoy" — it only welcomes the reader and points at the button
+below. If you leave `Link` empty, the bot falls back to invite links for the channels you
 selected.
 
 There is no Genre line. The episode line is written by the AI from the name and season, with a
@@ -315,8 +318,15 @@ Render instance the service sleeps when idle, so a scheduled post may fire late 
 awake (a cron ping to `/health`) or post immediately.
 
 `POST_COMMAND` renames the command; `POST_CHANNELS` sets the channel buttons; `POST_FIELDS` sets the
-questions asked; `POST_BUTTON_TEXT` and `JOIN_BUTTON_TEXT` change the button labels; `POST_ASK_IMAGE`
-turns the banner step off.
+questions asked; `POST_BUTTON_TEXT` (default `Download & Watch`) and `JOIN_BUTTON_TEXT` (default
+`Request to Join`) change the button labels; `POST_ASK_IMAGE` turns the banner step off.
+
+### Button labels carry no emoji
+
+Buttons are text only. The channel emojis still live in `LINK_BLOCKS` for reference but are not drawn
+on the buttons, and the post channel picker marks a chosen channel with `√` rather than a coloured
+emoji. If you had `POST_BUTTON_TEXT` or `JOIN_BUTTON_TEXT` set in your environment with an emoji,
+delete that variable to pick up the new default.
 
 ---
 

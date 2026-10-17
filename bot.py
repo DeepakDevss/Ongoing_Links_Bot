@@ -792,7 +792,7 @@ def link_keyboard(extra_rows=None):
         if r not in by_row:
             by_row[r] = []
             order.append(r)
-        label = f"{b['emoji']} {fonts.bold(b['name'])}" if b.get("emoji") else fonts.bold(b["name"])
+        label = fonts.bold(b["name"])   # buttons par emoji nahi
         by_row[r].append(_btn(label, url=b["url"], style="primary"))   # blue
     for r in order:
         rows.append(by_row[r])
@@ -1609,7 +1609,7 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{sc('username')} : {uname}",
     ]
     kb = InlineKeyboardMarkup([[
-        _btn("✅ Approve", callback_data=f"jr_ok:{chat.id}:{usr.id}", style="success"),
+        _btn("Approve", callback_data=f"jr_ok:{chat.id}:{usr.id}", style="success"),
     ]])
     try:
         await context.bot.send_message(target, "\n".join(lines), reply_markup=kb)
@@ -1970,7 +1970,7 @@ async def cmd_promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if approver and approver != update.effective_user.id:
             sc, bd = fonts.small_caps, fonts.bold
             kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-                "✅ Approve", callback_data=f"promo_ok:{chat.id}:{uid}",
+                "Approve", callback_data=f"promo_ok:{chat.id}:{uid}",
                 style="success")]])
             try:
                 await context.bot.send_message(
@@ -2300,11 +2300,11 @@ def _channel_rows(sel) -> list:
         r = []
         for name, cid in row:
             c = _norm_chat_id(cid)
-            mark = "✅ " if c in sel else ""
+            mark = "√ " if c in sel else ""
             r.append(_btn(f"{mark}{name}", callback_data=f"postch:{c}",
                           style="success" if c in sel else "primary"))
         rows.append(r)
-    rows.append([_btn("➡️ Done", callback_data="postch_done", style="success")])
+    rows.append([_btn("Done", callback_data="postch_done", style="success")])
     return rows
 
 
@@ -2351,8 +2351,8 @@ async def _post_ask(chat_id, context, uid):
     if not fl.get("ep_line"):
         fl["ep_line"] = await _ep_line(preview)
     kb = InlineKeyboardMarkup([[
-        _btn("🚀 Post now", callback_data="postgo:now", style="success"),
-        _btn("🕒 Schedule", callback_data="postgo:sched", style="primary"),
+        _btn("Post now", callback_data="postgo:now", style="success"),
+        _btn("Schedule", callback_data="postgo:sched", style="primary"),
     ]])
     chans = ", ".join(str(c) for c in (fl.get("channels") or []))
     img = "✅" if fl.get("image") else "—"
@@ -2494,10 +2494,15 @@ async def _welcome_upgrade(context, msg, name, p, kb):
     Message pehle hi turant ja chuka hota hai — isliye koi delay nahi."""
     try:
         line = await ask_ai(
-            f"Someone just opened the bot to see the {p.get('type', 'post').lower()} "
-            f"'{name}'. Write a short 1-2 line warm welcome for them, in the language "
-            "of the post title if that is clear, otherwise English. "
-            "No markdown, minimal emoji.", mem_key=None)
+            f"Someone just opened this bot to watch the {p.get('type', 'post').lower()} "
+            f'titled "{name}". Write ONE short, plain, respectful welcome line '
+            "(at most two short sentences), in English. Say only that they are "
+            "welcome and that the channel link is right below. "
+            "Do NOT use cheesy filler or hype, no exclamation marks, no emoji, and "
+            'never lines like "sit back and enjoy", "relax", "buckle up", "you are '
+            'in the right place" or "enjoy the show". Do not repeat the title back '
+            "as a sentence. No markdown.",
+            mem_key=None)
         if line and line != busy_message():
             await msg.edit_text(f"{line}\n\n{fonts.bold(name)}", reply_markup=kb)
     except Exception as e:
@@ -2521,7 +2526,8 @@ async def _post_welcome(update, context, p):
         rows = [[_btn(JOIN_BUTTON_TEXT, url="https://t.me", style="primary")]]
     kb = InlineKeyboardMarkup(rows)
     sent = await update.effective_message.reply_text(
-        f"Join the channel for {name}.\n\n{fonts.bold(name)}", reply_markup=kb)
+        f"{fonts.bold(name)}\n\n"
+        f"{fonts.small_caps('tap below to open the channel')}", reply_markup=kb)
     try:
         asyncio.create_task(_welcome_upgrade(context, sent, name, p, kb))
     except Exception:
