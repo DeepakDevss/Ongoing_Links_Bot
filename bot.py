@@ -158,13 +158,19 @@ def _db_load():
 
 
 def _db_save(data):
-    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-    tmp = DB_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fsync(f.fileno())   # power-loss par aadhi likhi file na bane
-    os.replace(tmp, DB_PATH)
+    """JSON likho. Disk full / permission error par CRASH na ho — log karo."""
+    try:
+        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+        tmp = DB_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())   # power-loss par aadhi likhi file na bane
+        os.replace(tmp, DB_PATH)
+    except OSError as e:
+        log.error("DB save fail (disk full / permission?): %s", e)
+    except Exception as e:
+        log.error("DB save fail: %s", e)
 
 
 _chat_ids_cache = None
@@ -1299,7 +1305,7 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 out.append(f"{sc('on')}   : {', '.join(on) if on else '-'}")
                 out.append(f"{sc('off')}  : {', '.join(off) if off else '-'}")
             else:
-                out.append(f"{sc('note')} : {sc('bot admin nahi - verify nahi hoga')}")
+                out.append(f"{sc('note')} : {sc('the bot is not an admin - this chat cannot be verified')}")
         except Exception as e:
             out.append(f"{sc('bot')}  : {bd('FAIL')} - {_err_hint(e)}")
         try:
@@ -1400,7 +1406,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("bs:"):
-        await q.answer("Colour OK" if _STYLE_OK else "Style support nahi")
+        await q.answer("Colour OK" if _STYLE_OK else "Colour is not supported")
         return
 
     if data.startswith("posttype:"):
@@ -2033,7 +2039,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/ai <sawaal> — AI se seedha jawab (gate + rate limit ke saath)."""
     q = " ".join(context.args or []).strip()
     if not q:
-        await update.effective_message.reply_text("Use: /ai <sawaal>")
+        await update.effective_message.reply_text("Use: /ai <question>")
         return
     uid = update.effective_user.id
     if await needs_join(context, uid):
@@ -2149,8 +2155,12 @@ def _norm_chat_id(x) -> int:
 
 
 def _esc(t) -> str:
-    """HTML parse_mode ke liye & < > escape karo."""
-    return (str(t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    """HTML parse_mode ke liye & < > aur QUOTES escape karo.
+    Quotes zaroori hain: user ka Link field `href="..."` me jaata hai — usme ek
+    `"` aa gaya to HTML toot jata aur Telegram post reject kar deta."""
+    return (str(t or "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#x27;"))
 
 
 async def _ep_line(p) -> str:
@@ -2175,7 +2185,7 @@ async def _ep_line(p) -> str:
     return f"S{s} EPISODE ADDED" if s else "NEW EPISODE ADDED"
 
 
-def _post_caption(p, ep_line="", link_url="") -> str:
+def _post_caption(p, ep_line="", link_url="", text_links=True) -> str:
     """Post ka caption (HTML) — blockquote (quote) style ke saath.
     Ep line aur WATCH & DOWNLOAD dono `link_url` par jaate hain (bot ka deep
     link — wahi jo neeche wale button me hai)."""
@@ -2190,10 +2200,14 @@ def _post_caption(p, ep_line="", link_url="") -> str:
     if det:
         out.append("<blockquote>" + "\n".join(det) + "</blockquote>")
         out.append("")
-    out.append('<blockquote>[ Creadit - <a href="' + _esc(POST_CREDIT_URL) + '">'
-               + _esc(bd(POST_CREDIT_TEXT)) + "</a> ]</blockquote>")
+    _ct = _esc(bd(POST_CREDIT_TEXT))
+    if text_links:
+        out.append('<blockquote>[ Creadit - <a href="' + _esc(POST_CREDIT_URL)
+                   + '">' + _ct + "</a> ]</blockquote>")
+    else:
+        out.append(f"<blockquote>[ Creadit - {_ct} ]</blockquote>")
     out.append("")
-    if link_url:
+    if link_url and text_links:
         if ep_line:
             out.append(sep)
             em = f"{POST_EP_EMOJI} " if POST_EP_EMOJI else ""
@@ -2201,6 +2215,16 @@ def _post_caption(p, ep_line="", link_url="") -> str:
             out.append(f'   {em}<a href="{_esc(link_url)}">{_esc(bd(ep_line))}</a>{tail}')
         out.append(sep)
         out.append(f'   ★ <a href="{_esc(link_url)}">{_esc(bd("WATCH & DOWNLOAD"))}</a> ★')
+        out.append(sep)
+    elif ep_line or link_url:
+        if ep_line:
+            out.append(sep)
+            em = f"{POST_EP_EMOJI} " if POST_EP_EMOJI else ""
+            tail = f" {POST_EP_EMOJI}" if POST_EP_EMOJI else ""
+            out.append(f"   {em}{_esc(bd(ep_line))}{tail}")
+        if link_url:
+            out.append(sep)
+            out.append(f"   ★ {_esc(bd('WATCH & DOWNLOAD'))} ★")
         out.append(sep)
     elif ep_line:
         out.append(sep)
@@ -2284,6 +2308,18 @@ async def _vision_read(context, file_id, prompt) -> str:
     except Exception as e:
         log.warning("Vision fail: %s", e)
         return ""
+
+
+_URL_RX = re.compile(r"(?:https?://|www\.|t\.me/)\S+", re.I)
+
+
+def _strip_urls(t: str) -> str:
+    """Text se URL hata do (welcome line me raw link nahi dikhna chahiye —
+    link to neeche wale button me hai)."""
+    out = _URL_RX.sub("", t or "")
+    out = re.sub(r"[ \t]+", " ", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return "\n".join(ln.rstrip() for ln in out.splitlines()).strip()
 
 
 VISION_PROMPT = (
@@ -2437,34 +2473,65 @@ async def on_private_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _post_ask(update.effective_chat.id, context, user.id)
 
 
+def _fit_caption(cap: str) -> str:
+    """1024 limit — poore line par kaato, taaki HTML tag beech me na kate."""
+    if len(cap) <= 1024:
+        return cap
+    keep = []
+    for line in cap.split("\n"):
+        if len("\n".join(keep + [line])) > 1024:
+            break
+        keep.append(line)
+    return "\n".join(keep)
+
+
+async def _post_send_one(context, cid, p, cap, kb, html=True):
+    kw = {"parse_mode": "HTML"} if html else {}
+    if p.get("image"):
+        await context.bot.send_photo(cid, p["image"], caption=cap, reply_markup=kb, **kw)
+    else:
+        await context.bot.send_message(cid, cap, reply_markup=kb, **kw)
+
+
 async def _send_post(context, code):
-    """Post bhejo — saare chune channels par, image + caption + Download button."""
+    """Post bhejo — saare chune channels par, image + caption + Download button.
+
+    Mastermind: bot ke saare asli links BUTTON me hain (inline keyboard buttons
+    message text nahi hote, isliye koi anti-spam / link filter unhe nahi rokta).
+    Caption me sirf decoration ke liye text-links hote hain — agar kisi channel ne
+    link wala text block kar rakha ho aur pehli koshish fail ho, to wahi caption
+    BINA text-link ke dobara bhejte hain (button phir bhi kaam karta hai)."""
     p = db_post_get(code)
     if not p:
         return False
     kb = InlineKeyboardMarkup([[_btn(
         POST_BUTTON_TEXT, url=_deep_link(context, code), style="primary")]])
     ep = p.get("ep_line") or await _ep_line(p)
-    cap = _post_caption(p, ep, _deep_link(context, code))
-    if len(cap) > 1024:                      # HTML tag kabhi beech me na kate
-        keep = []
-        for line in cap.split("\n"):
-            if len("\n".join(keep + [line])) > 1024:
-                break
-            keep.append(line)
-        cap = "\n".join(keep)
+    deep = _deep_link(context, code)
+    cap = _fit_caption(_post_caption(p, ep, deep))
     chans = p.get("channel_ids") or ([p["channel_id"]] if p.get("channel_id") else [])
     ok = False
+    failed = []
     for cid in chans:
         try:
-            if p.get("image"):
-                await context.bot.send_photo(cid, p["image"], caption=cap,
-                                             reply_markup=kb, parse_mode="HTML")
-            else:
-                await context.bot.send_message(cid, cap, reply_markup=kb, parse_mode="HTML")
+            await _post_send_one(context, cid, p, cap, kb, html=True)
             ok = True
         except Exception as e:
-            log.warning("Post bhejne me fail (%s): %s", cid, e)
+            log.warning("Post fail (%s): %s", cid, e)
+            failed.append(cid)
+    if failed:
+        plain = _fit_caption(_post_caption(p, ep, deep, text_links=False))
+        still = []
+        for cid in failed:
+            try:
+                await _post_send_one(context, cid, p, plain, kb, html=False)
+                ok = True
+                log.info("Post plain fallback chal gaya (%s) — links buttons me hain.", cid)
+            except Exception as e:
+                log.warning("Post plain fallback bhi fail (%s): %s", cid, e)
+                still.append(cid)
+        if still:
+            log.error("Post in channels me nahi gaya: %s", still)
     if ok:
         db_post_update(code, posted=True, posted_at=_now())
     return ok
@@ -2501,10 +2568,13 @@ async def _welcome_upgrade(context, msg, name, p, kb):
             "Do NOT use cheesy filler or hype, no exclamation marks, no emoji, and "
             'never lines like "sit back and enjoy", "relax", "buckle up", "you are '
             'in the right place" or "enjoy the show". Do not repeat the title back '
-            "as a sentence. No markdown.",
+            "as a sentence. Do NOT paste any URL — the link is already on the "
+            "button below. No markdown.",
             mem_key=None)
         if line and line != busy_message():
-            await msg.edit_text(f"{line}\n\n{fonts.bold(name)}", reply_markup=kb)
+            line = _strip_urls(line)          # raw link text me nahi dikhana
+            if line:
+                await msg.edit_text(f"{line}\n\n{fonts.bold(name)}", reply_markup=kb)
     except Exception as e:
         log.info("Welcome AI upgrade skip: %s", e)
 
@@ -2548,9 +2618,9 @@ async def cmd_btnstyle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = json.dumps(kb.to_dict())
     await update.effective_message.reply_text(
         f"{fonts.bold('Button colour test')}\n\n"
-        "Teen buttons rangeen (neela / hara / laal) dikhne chahiye.\n"
-        "Sab plain dikhe to tumhara Telegram app purana hai.\n\n"
-        f"{fonts.small_caps('ye payload bot bhej raha hai')}:\n{payload[:280]}",
+        "The three buttons should look coloured (blue, green, red).\n"
+        "If they all look plain, your Telegram app is out of date.\n\n"
+        f"{fonts.small_caps('this is the payload the bot is sending')}:\n{payload[:280]}",
         reply_markup=kb)
 
 

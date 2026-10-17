@@ -238,7 +238,7 @@ command, with `★` marking the owner-only ones.
 | `/broadcast` | Send a message to all known users |
 | `/ban` / `/unban` | Bot-wide ban / unban by user ID |
 
-An admin who sends an owner-only command gets *"Sirf owner ye kar sakta hai."*
+An admin who sends an owner-only command gets *"Only the owner can do this."*
 
 ### Group moderation — the bot must be an admin in that group
 
@@ -263,7 +263,7 @@ Owner and admins only. Builds a channel post whose button is a tracked deep link
 2. **Pick the channels** — the buttons come from `POST_CHANNELS`. Tap to toggle (`✅`), tap as many as you want, then **➡️ Done**. The post goes to every channel you selected.
 3. **Send the banner image.** The bot reads it with AI vision and shows what it read — as a hint only, nothing is filled in for you.
 4. The bot then asks for each field in `POST_FIELDS` (Name, Season, Episodes, Quality, Language, Link) one by one. Reply to each, or send `skip` to leave one out. `Link` is the join destination (see below) — it is not printed in the post.
-5. Choose **Abhi post karo** (now) or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
+5. Choose **Post now** or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
 
 The post goes out as a **photo** (your banner) with a styled caption and a **📥 Download & Watch**
 button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so when a reader taps it,
@@ -312,6 +312,11 @@ Note the AI may guess the episode number — check the preview before posting.
 
 `/posts` lists every post with its code and link.
 
+**Links never depend on message text.** Every real link the bot hands out lives in an inline-keyboard
+button, and buttons are not message text — so anti-spam bots, link filters and preview settings cannot
+touch them. The caption's text links are decoration only: if a channel rejects the caption because of
+them, the bot automatically re-sends the same post with those text links removed and the button intact.
+
 **Three things worth knowing.** The bot can only post to a chat where it is an admin. Vision needs a
 working AI key — if it fails, the bot just skips pre-filling and asks you normally. And on a free
 Render instance the service sleeps when idle, so a scheduled post may fire late — keep the service
@@ -357,8 +362,9 @@ two links (`AI_BOT_LINK`, `COMMUNITY_LINK`) and is given concrete triggers for w
   find more, or what the community is.
 - **AI** — when the user asks for another AI, more help, or a smarter assistant.
 
-Otherwise it must not mention them at all — never as a footer or signature, never twice, at most once
-per chat. If a link looks blocked it falls back to plain `t.me/...` text.
+On any other question it must not bring them up at all — not on a random or unrelated question, not
+as a footer or signature, never twice, at most once per chat, and never as a raw URL inside a
+welcome. If a link looks blocked it falls back to plain `t.me/...` text.
 
 > **If you set `AI_SYSTEM_PROMPT` in your Render environment, it overrides this whole prompt** and
 > none of the above applies. The bot logs which one is in use at startup — look for `AI prompt:` in
