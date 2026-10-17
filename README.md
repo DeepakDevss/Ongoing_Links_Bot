@@ -261,13 +261,17 @@ Owner and admins only. Builds a channel post whose button is a tracked deep link
 1. `/post` → pick a type (`POST_TYPES`: Anime / Movie / Series).
 2. **Pick the channels** — the buttons come from `POST_CHANNELS`. Tap to toggle (`✅`), tap as many as you want, then **➡️ Done**. The post goes to every channel you selected.
 3. **Send the banner image.** The bot reads it with AI vision and shows what it read — as a hint only, nothing is filled in for you.
-4. The bot then asks for each field in `POST_FIELDS` (Name, Season, Quality, Language, Link) one by one. Reply to each, or send `skip` to leave one out.
+4. The bot then asks for each field in `POST_FIELDS` (Name, Season, Quality, Language, Link) one by one. Reply to each, or send `skip` to leave one out. `Link` is the join destination (see below) — it is not printed in the post.
 5. Choose **Abhi post karo** (now) or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
 
-The post goes out as a **photo** (your banner) with the details as the caption and a **📥 Download**
-button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so when a reader taps it,
-their chat with the bot opens and the bot already knows which post and which channels it belongs to.
-It replies with a short line and a **🔔 Request to Join** button for each channel.
+The post goes out as a **photo** (your banner) with the details as the caption and a
+**📥 Download & Watch** button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so
+when a reader taps it, their chat with the bot opens and the bot already knows which post it is.
+
+The `Link` field is **not shown in the post**. It is used as the destination of the
+**🔔 Request to Join** button: the reader taps *Download & Watch*, the bot greets them, and that
+button opens the link you gave. If you leave `Link` empty, the bot falls back to invite links for
+the channels you selected.
 
 `/posts` lists every post with its code and link.
 

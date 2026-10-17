@@ -2038,6 +2038,20 @@ def _deep_link(context, code) -> str:
     return f"https://t.me/{context.bot.username}?start=p{code}"
 
 
+def _as_url(v) -> str:
+    """Link field ko pura URL banao (https://t.me/xxx). Khali/galat -> ""."""
+    v = str(v or "").strip()
+    if not v:
+        return ""
+    if v.startswith(("http://", "https://")):
+        return v
+    if v.startswith(("t.me/", "www.")):
+        return "https://" + v
+    if re.match(r"^@?[A-Za-z0-9_]{4,}$", v):
+        return "https://t.me/" + v.lstrip("@")
+    return ""
+
+
 def _norm_chat_id(x) -> int:
     """1002549849997 -> -1002549849997 (jo config me diya hai usko theek karo)."""
     cid = int(x)
@@ -2048,7 +2062,9 @@ def _post_text(p) -> str:
     sc, bd = fonts.small_caps, fonts.bold
     name = p.get("Name") or "-"
     out = [f"{bd(str(p.get('type', 'Post')))}  —  {bd(name)}"]
-    skip = {"Name", "code", "type", "channel_id", "channel_ids", "channel_url",
+    # "Link" yahan jaan-boojh kar skip hai — wo post par dikhta nahi,
+    # sirf "Request to Join" button ka destination banta hai.
+    skip = {"Name", "Link", "code", "type", "channel_id", "channel_ids", "channel_url",
             "image", "posted", "posted_at", "created", "post_at"}
     for k, v in p.items():
         if k in skip or not v:
@@ -2323,13 +2339,16 @@ async def _post_welcome(update, context, p):
     if not line or line == busy_message():
         line = f"Join the channel for {name}."
     rows = []
-    for cid in (p.get("channel_ids") or []):
-        url = await _channel_join_url(context, cid)
-        if url:
-            rows.append([InlineKeyboardButton(JOIN_BUTTON_TEXT, url=url)])
+    link = _as_url(p.get("Link"))          # user ne jo Link diya wahi join target
+    if link:
+        rows = [[InlineKeyboardButton(JOIN_BUTTON_TEXT, url=link)]]
+    else:
+        for cid in (p.get("channel_ids") or []):
+            url = await _channel_join_url(context, cid)
+            if url:
+                rows.append([InlineKeyboardButton(JOIN_BUTTON_TEXT, url=url)])
     if not rows:
-        rows = [[InlineKeyboardButton(
-            JOIN_BUTTON_TEXT, url=p.get("channel_url") or "https://t.me")]]
+        rows = [[InlineKeyboardButton(JOIN_BUTTON_TEXT, url="https://t.me")]]
     await update.effective_message.reply_text(
         f"{line}\n\n{fonts.bold(name)}", reply_markup=InlineKeyboardMarkup(rows))
 

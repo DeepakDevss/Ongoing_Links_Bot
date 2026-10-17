@@ -318,7 +318,7 @@ POST_FIELDS = [x.strip() for x in
                os.getenv("POST_FIELDS", "Name,Season,Quality,Language,Link").split(",") if x.strip()]
 
 # Post me jo button lagta hai — ye bot ka deep link kholta hai
-POST_BUTTON_TEXT = os.getenv("POST_BUTTON_TEXT", "📥 Download")
+POST_BUTTON_TEXT = os.getenv("POST_BUTTON_TEXT", "📥 Download & Watch")
 
 # Deep link se aane wale user ko jo button dikhta hai (us channel ka link)
 JOIN_BUTTON_TEXT = os.getenv("JOIN_BUTTON_TEXT", "🔔 Request to Join")
