@@ -66,7 +66,7 @@ def _int_env(name, default=0):
 
 ADMIN_IDS = [
     int(x)
-    for x in os.getenv("ADMIN_IDS", "0").split(",")
+    for x in os.getenv("ADMIN_IDS", "").split(",")
     if x.strip().lstrip("-").isdigit()
 ]
 

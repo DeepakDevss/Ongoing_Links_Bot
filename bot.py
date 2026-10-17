@@ -782,6 +782,17 @@ async def verify_blocks_on_startup(app: Application):
         except Exception as e:
             log.warning("Block '%s' verify fail (id=%s): %s", b["name"], cid, e)
             problems.append(f"• {b['name']}: check fail ({type(e).__name__})")
+    # DB corrupt hui thi? (rename ho ke <db>.corrupt-* bani hai) -> owner ko batao
+    try:
+        _d = os.path.dirname(DB_PATH) or "."
+        _base = os.path.basename(DB_PATH)
+        _bad = sorted(f for f in os.listdir(_d) if f.startswith(_base + ".corrupt-"))
+        if _bad:
+            problems.append(
+                f"• DB corrupt thi — {len(_bad)} file alag rakhi gayi (data safe hai): "
+                + ", ".join(_bad[-3:]))
+    except Exception:
+        pass
     if problems:
         text = (
             "⚠️ Force-join gate abhi poori tarah kaam nahi karega:\n\n"
