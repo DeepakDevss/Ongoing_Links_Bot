@@ -274,30 +274,32 @@ real inline links):
 ```
 ❝ Attack On Titan ❞
 
-━━━━━━━━━━━━━━━━━
-►Season :- 03
+►Season :- 03                 <- inside a <blockquote> (the quote bar)
 ►Episodes :- 22
 ►Quality :- 480p, 720p, 1080p, 4K [ DUAL ]
 ►Language :- Hindi Dub [ #OFFICIAL ]
-━━━━━━━━━━━━━━━━━
 
-[ Creadit - Ongoing ]        <- "Ongoing" links to POST_CREDIT_URL
+[ Creadit - Ongoing ]         <- <blockquote>; "Ongoing" links to POST_CREDIT_URL
 
 ━━━━━━━━━━━━━━━━━
-   S03 EPISODE 01-02 ADDED   <- written by the AI (POST_EP_LINE)
+   S03 EPISODE 01 ADDED       <- written by the AI (POST_EP_LINE)
 ━━━━━━━━━━━━━━━━━
-   ★ WATCH & DOWNLOAD ★      <- links to the Link you gave
+   ★ WATCH & DOWNLOAD ★
 ━━━━━━━━━━━━━━━━━
 ```
 
-The `Link` field is **not printed as text**. It becomes the `WATCH & DOWNLOAD` link, and also the
-destination of the **🔔 Request to Join** button — the reader taps *Download & Watch*, the bot greets
-them, and that button opens the link you gave. If you leave `Link` empty, the bot falls back to
-invite links for the channels you selected.
+The episode line, the `WATCH & DOWNLOAD` line and the button **all point to the same bot deep
+link**. Tapping any of them opens the bot chat and `/start` runs automatically, and the bot then
+hands over the link — exactly like the button.
 
-There is no Genre line. The episode line is written by the AI from the name and season; set
-`POST_EP_LINE=False` to build it from the season alone. Note the AI may guess episode numbers —
-check the preview before posting.
+The `Link` field is **not printed as text**. It is the destination of the **🔔 Request to Join**
+button: the reader taps the post (or the button), the bot greets them, and that button opens the
+link you gave. If you leave `Link` empty, the bot falls back to invite links for the channels you
+selected.
+
+There is no Genre line. The episode line is written by the AI from the name and season, with a
+single episode number (never a range); set `POST_EP_LINE=False` to build it from the season alone.
+Note the AI may guess the episode number — check the preview before posting.
 
 `/posts` lists every post with its code and link.
 

@@ -2074,11 +2074,13 @@ async def _ep_line(p) -> str:
         try:
             t = await ask_ai(
                 f"Anime: {p.get('Name', '')}. Season: {season}. "
-                "Write one short line in exactly this style: 'S03 EPISODE 01-02 ADDED'. "
+                "Write one short line in exactly this style: 'S03 EPISODE 01 ADDED'. "
+                "Use ONE episode number only — never a range like 01-02. "
                 "Only that line, nothing else, no markdown, no quotes.",
                 mem_key=None)
             if t and t != busy_message():
                 line = t.strip().splitlines()[0].strip().strip('"').strip()
+                line = re.sub(r"(\d+)\s*-\s*\d+", r"\1", line)   # 01-02 -> 01
                 if line:
                     return line[:60]
         except Exception:
@@ -2087,26 +2089,34 @@ async def _ep_line(p) -> str:
     return f"S{s} EPISODE ADDED" if s else "NEW EPISODE ADDED"
 
 
-def _post_caption(p, ep_line="") -> str:
-    """Post ka caption (HTML) — screenshot wala format."""
+def _post_caption(p, ep_line="", link_url="") -> str:
+    """Post ka caption (HTML) — blockquote (quote) style ke saath.
+    Ep line aur WATCH & DOWNLOAD dono `link_url` par jaate hain (bot ka deep
+    link — wahi jo neeche wale button me hai)."""
     bd = fonts.bold
     sep = "━━━━━━━━━━━━━━━━━"
-    out = [f"❝ {_esc(bd(str(p.get('Name') or '-')))} ❞", "", sep]
+    out = [f"❝ {_esc(bd(str(p.get('Name') or '-')))} ❞", ""]
+    det = []
     for k in ("Season", "Episodes", "Quality", "Language"):
         v = p.get(k)
         if v:
-            out.append(f"►{k} :- {_esc(str(v)[:80])}")
-    out.append(sep)
+            det.append(f"►{k} :- {_esc(str(v)[:80])}")
+    if det:
+        out.append("<blockquote>" + "\n".join(det) + "</blockquote>")
+        out.append("")
+    out.append('<blockquote>[ Creadit - <a href="' + POST_CREDIT_URL + '">'
+               + _esc(bd(POST_CREDIT_TEXT)) + "</a> ]</blockquote>")
     out.append("")
-    out.append(f'[ Creadit - <a href="{POST_CREDIT_URL}">{_esc(bd(POST_CREDIT_TEXT))}</a> ]')
-    out.append("")
-    out.append(sep)
-    if ep_line:
-        out.append(f"   {_esc(ep_line)}")
+    if link_url:
+        if ep_line:
+            out.append(sep)
+            out.append(f'   <a href="{_esc(link_url)}">{_esc(bd(ep_line))}</a>')
         out.append(sep)
-    link = _as_url(p.get("Link"))
-    if link:
-        out.append(f'   ★ <a href="{_esc(link)}">WATCH &amp; DOWNLOAD</a> ★')
+        out.append(f'   ★ <a href="{_esc(link_url)}">{_esc(bd("WATCH & DOWNLOAD"))}</a> ★')
+        out.append(sep)
+    elif ep_line:
+        out.append(sep)
+        out.append(f"   {_esc(bd(ep_line))}")
         out.append(sep)
     return "\n".join(out)
 
@@ -2257,7 +2267,7 @@ async def _post_ask(chat_id, context, uid):
     img = "✅" if fl.get("image") else "—"
     await context.bot.send_message(
         chat_id,
-        f"{fonts.bold('PREVIEW')}\n\n{_post_caption(preview, fl['ep_line'])}"
+        f"{fonts.bold('PREVIEW')}\n\n{_post_caption(preview, fl['ep_line'], 'https://t.me/' + str(context.bot.username))}"
         f"\n\n{fonts.small_caps('channels')}: {chans}\n"
         f"{fonts.small_caps('image')}: {img}",
         reply_markup=kb, parse_mode="HTML")
@@ -2344,7 +2354,7 @@ async def _send_post(context, code):
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(
         POST_BUTTON_TEXT, url=_deep_link(context, code))]])
     ep = p.get("ep_line") or await _ep_line(p)
-    cap = _post_caption(p, ep)[:1024]
+    cap = _post_caption(p, ep, _deep_link(context, code))[:1024]
     chans = p.get("channel_ids") or ([p["channel_id"]] if p.get("channel_id") else [])
     ok = False
     for cid in chans:
