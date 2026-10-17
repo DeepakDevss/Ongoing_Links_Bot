@@ -339,9 +339,18 @@ bot remembers itself — the Bot API has no way to list pending requests.
 
 `AI_SYSTEM_PROMPT` tells the bot it is **Ongoing**, built by Deepak working alone — it never claims a
 team, company or studio, and never volunteers that it was "set up" or "installed" anywhere. It knows
-two links (`AI_BOT_LINK`, `COMMUNITY_LINK`) and is told to share them **only when they genuinely
-help** — never at random, never as a footer, at most once per conversation — and to fall back to
-plain `t.me/...` text if a link looks blocked.
+two links (`AI_BOT_LINK`, `COMMUNITY_LINK`) and is given concrete triggers for when to share them:
+
+- **Community** — when the user asks for more anime/episodes, a group or channel to join, where to
+  find more, or what the community is.
+- **AI** — when the user asks for another AI, more help, or a smarter assistant.
+
+Otherwise it must not mention them at all — never as a footer or signature, never twice, at most once
+per chat. If a link looks blocked it falls back to plain `t.me/...` text.
+
+> **If you set `AI_SYSTEM_PROMPT` in your Render environment, it overrides this whole prompt** and
+> none of the above applies. The bot logs which one is in use at startup — look for `AI prompt:` in
+> the Render logs. Delete the env var if you want the built-in prompt.
 
 ### How the bot learns a chat's ID
 
@@ -378,6 +387,8 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Users are always blocked | `MIN_JOINS_REQUIRED` higher than the number of configured chats | Lower the value or add the missing chat IDs |
 | Join buttons show wrong chats | `LINK_BLOCKS` or chat IDs are incorrect | Re-check IDs with `/getid` and update `config.py` |
 | Data resets after deploy | Ephemeral filesystem | Attach a persistent disk and set the database path to it |
+| Buttons have no colour | `python-telegram-bot` older than 22.7, or an old Telegram client | Upload `requirements.txt` (`>=22.7`) and redeploy; button colours need a client from after 9 Feb 2026. The startup log prints `button colour: supported/NOT supported` |
+| Bot still behaves like an older version | `AI_SYSTEM_PROMPT` set in the environment overrides the built-in prompt | Delete `AI_SYSTEM_PROMPT` from the Render environment |
 | Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |
 
 ---

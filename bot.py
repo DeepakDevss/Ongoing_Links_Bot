@@ -36,6 +36,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+import telegram
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -80,6 +81,7 @@ from config import (
     admin_label,
     RULES_TEXT,
     NOTIFY_OWNER,
+    AI_PROMPT_FROM_ENV,
     POST_COMMAND,
     POST_CHANNELS,
     POST_ASK_IMAGE,
@@ -750,13 +752,22 @@ async def needs_join(context, user_id, force=False) -> bool:
     return user_id not in _passed
 
 
+# Kya is PTB par button `style` (color) support hai? (>=22.7 chahiye)
+try:
+    InlineKeyboardButton("x", url="https://t.me", style="primary")
+    _STYLE_OK = True
+except TypeError:
+    _STYLE_OK = False
+
+
 def _btn(label, **kw):
-    """InlineKeyboardButton — `style` support ho to lagao (purane PTB par nahi)."""
-    try:
-        return InlineKeyboardButton(label, **kw)
-    except TypeError:
+    """InlineKeyboardButton — `style` (color) support ho to lagao.
+    Purane PTB par style chupchaap drop nahi hota — log me warn karta hai."""
+    if "style" in kw and not _STYLE_OK:
+        log.warning("Button style support nahi hai (PTB purana) — color nahi aayega. "
+                    "requirements.txt me python-telegram-bot>=22.7 chahiye.")
         kw.pop("style", None)
-        return InlineKeyboardButton(label, **kw)
+    return InlineKeyboardButton(label, **kw)
 
 
 def link_keyboard(extra_rows=None):
@@ -808,6 +819,11 @@ async def send_join_gate(update: Update, context, edit=False):
 async def verify_blocks_on_startup(app: Application):
     """Start par check: har enforced chat ki id hai? bot admin hai?
     Jo problem mile wo admin ko DM bhi bhejo — sirf log me chhodo mat."""
+    log.info("PTB %s | button colour: %s | AI prompt: %s",
+             telegram.__version__,
+             "supported" if _STYLE_OK else "NOT supported — upgrade python-telegram-bot to >=22.7",
+             "ENV OVERRIDE (Render me AI_SYSTEM_PROMPT set hai!)"
+             if AI_PROMPT_FROM_ENV else "built-in")
     try:
         me = await app.bot.get_me()
     except Exception as e:
@@ -1477,7 +1493,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=update.effective_chat.id,
             text=text,
             reply_markup=link_keyboard(extra_rows=[
-                [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
+                [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
             ]),
         )
         return
@@ -1571,7 +1587,7 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{sc('username')} : {uname}",
     ]
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Approve", callback_data=f"jr_ok:{chat.id}:{usr.id}"),
+        _btn("✅ Approve", callback_data=f"jr_ok:{chat.id}:{usr.id}", style="success"),
     ]])
     try:
         await context.bot.send_message(target, "\n".join(lines), reply_markup=kb)
@@ -1932,7 +1948,8 @@ async def cmd_promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if approver and approver != update.effective_user.id:
             sc, bd = fonts.small_caps, fonts.bold
             kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-                "✅ Approve", callback_data=f"promo_ok:{chat.id}:{uid}")]])
+                "✅ Approve", callback_data=f"promo_ok:{chat.id}:{uid}",
+                style="success")]])
             try:
                 await context.bot.send_message(
                     approver,
@@ -2402,8 +2419,8 @@ async def _send_post(context, code):
     p = db_post_get(code)
     if not p:
         return False
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-        POST_BUTTON_TEXT, url=_deep_link(context, code))]])
+    kb = InlineKeyboardMarkup([[_btn(
+        POST_BUTTON_TEXT, url=_deep_link(context, code), style="primary")]])
     ep = p.get("ep_line") or await _ep_line(p)
     cap = _post_caption(p, ep, _deep_link(context, code))[:1024]
     chans = p.get("channel_ids") or ([p["channel_id"]] if p.get("channel_id") else [])
@@ -2463,14 +2480,14 @@ async def _post_welcome(update, context, p):
     rows = []
     link = _as_url(p.get("Link"))          # user ne jo Link diya wahi join target
     if link:
-        rows = [[InlineKeyboardButton(JOIN_BUTTON_TEXT, url=link)]]
+        rows = [[_btn(JOIN_BUTTON_TEXT, url=link, style="primary")]]
     else:
         for cid in (p.get("channel_ids") or []):
             url = await _channel_join_url(context, cid)
             if url:
-                rows.append([InlineKeyboardButton(JOIN_BUTTON_TEXT, url=url)])
+                rows.append([_btn(JOIN_BUTTON_TEXT, url=url, style="primary")])
     if not rows:
-        rows = [[InlineKeyboardButton(JOIN_BUTTON_TEXT, url="https://t.me")]]
+        rows = [[_btn(JOIN_BUTTON_TEXT, url="https://t.me", style="primary")]]
     kb = InlineKeyboardMarkup(rows)
     sent = await update.effective_message.reply_text(
         f"Join the channel for {name}.\n\n{fonts.bold(name)}", reply_markup=kb)
