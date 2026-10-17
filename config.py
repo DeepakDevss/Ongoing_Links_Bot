@@ -337,7 +337,10 @@ POST_CHANNELS = [
 POST_CREDIT_TEXT = os.getenv("POST_CREDIT_TEXT", "Ongoing")
 POST_CREDIT_URL = os.getenv("POST_CREDIT_URL", "https://t.me/ANIME_WORLD_8BOT")
 
-# Post me "S03 EPISODE 01-02 ADDED" jaisi line AI banata hai? (False = season se)
+# Episode line ke dono taraf ye emoji lagta hai (jaise 🫧 S01 EPISODE 01 ADDED 🫧)
+POST_EP_EMOJI = os.getenv("POST_EP_EMOJI", "🫧")
+
+# Post me "S03 EPISODE 01 ADDED" jaisi line AI banata hai? (False = season se)
 POST_EP_LINE = os.getenv("POST_EP_LINE", "True").lower() == "true"
 
 # /post me banner image maangni hai? (AI vision se padhi jaati hai)

@@ -272,21 +272,23 @@ The caption looks like this (sent with `parse_mode=HTML` so the credit and the d
 real inline links):
 
 ```
-❝ Attack On Titan ❞
+▌❝ Attack On Titan ❞          <- <blockquote>
 
-►Season :- 03                 <- inside a <blockquote> (the quote bar)
-►Episodes :- 22
-►Quality :- 480p, 720p, 1080p, 4K [ DUAL ]
-►Language :- Hindi Dub [ #OFFICIAL ]
+▌►Season :- 03                <- <blockquote> (the quote bar)
+▌►Episodes :- 22
+▌►Quality :- 480p, 720p, 1080p, 4K [ DUAL ]
+▌►Language :- Hindi Dub [ #OFFICIAL ]
 
-[ Creadit - Ongoing ]         <- <blockquote>; "Ongoing" links to POST_CREDIT_URL
+▌[ Creadit - Ongoing ]        <- <blockquote>; "Ongoing" links to POST_CREDIT_URL
 
 ━━━━━━━━━━━━━━━━━
-   S03 EPISODE 01 ADDED       <- written by the AI (POST_EP_LINE)
+   🫧 S03 EPISODE 01 ADDED 🫧  <- AI (POST_EP_LINE); emoji from POST_EP_EMOJI
 ━━━━━━━━━━━━━━━━━
    ★ WATCH & DOWNLOAD ★
 ━━━━━━━━━━━━━━━━━
 ```
+
+(`▌` is the quote bar Telegram draws for `<blockquote>`.)
 
 The episode line, the `WATCH & DOWNLOAD` line and the button **all point to the same bot deep
 link**. Tapping any of them opens the bot chat and `/start` runs automatically, and the bot then
@@ -294,7 +296,10 @@ hands over the link — exactly like the button.
 
 The `Link` field is **not printed as text**. It is the destination of the **🔔 Request to Join**
 button: the reader taps the post (or the button), the bot greets them, and that button opens the
-link you gave. If you leave `Link` empty, the bot falls back to invite links for the channels you
+link you gave.
+
+The greeting is sent **immediately** — no AI wait — so the button appears the instant the deep link
+opens. The AI-written welcome line is fetched in the background and swaps in a moment later. If you leave `Link` empty, the bot falls back to invite links for the channels you
 selected.
 
 There is no Genre line. The episode line is written by the AI from the name and season, with a

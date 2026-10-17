@@ -85,6 +85,7 @@ from config import (
     POST_ASK_IMAGE,
     POST_CREDIT_TEXT,
     POST_CREDIT_URL,
+    POST_EP_EMOJI,
     POST_EP_LINE,
     POST_TYPES,
     POST_FIELDS,
@@ -2095,7 +2096,7 @@ def _post_caption(p, ep_line="", link_url="") -> str:
     link — wahi jo neeche wale button me hai)."""
     bd = fonts.bold
     sep = "━━━━━━━━━━━━━━━━━"
-    out = [f"❝ {_esc(bd(str(p.get('Name') or '-')))} ❞", ""]
+    out = [f"<blockquote>❝ {_esc(bd(str(p.get('Name') or '-')))} ❞</blockquote>", ""]
     det = []
     for k in ("Season", "Episodes", "Quality", "Language"):
         v = p.get(k)
@@ -2110,13 +2111,17 @@ def _post_caption(p, ep_line="", link_url="") -> str:
     if link_url:
         if ep_line:
             out.append(sep)
-            out.append(f'   <a href="{_esc(link_url)}">{_esc(bd(ep_line))}</a>')
+            em = f"{POST_EP_EMOJI} " if POST_EP_EMOJI else ""
+            tail = f" {POST_EP_EMOJI}" if POST_EP_EMOJI else ""
+            out.append(f'   {em}<a href="{_esc(link_url)}">{_esc(bd(ep_line))}</a>{tail}')
         out.append(sep)
         out.append(f'   ★ <a href="{_esc(link_url)}">{_esc(bd("WATCH & DOWNLOAD"))}</a> ★')
         out.append(sep)
     elif ep_line:
         out.append(sep)
-        out.append(f"   {_esc(bd(ep_line))}")
+        em = f"{POST_EP_EMOJI} " if POST_EP_EMOJI else ""
+        tail = f" {POST_EP_EMOJI}" if POST_EP_EMOJI else ""
+        out.append(f"   {em}{_esc(bd(ep_line))}{tail}")
         out.append(sep)
     return "\n".join(out)
 
@@ -2391,21 +2396,24 @@ async def _rearm_posts(app):
                 log.info("Re-armed scheduled post %s at %s", code, dt)
 
 
-async def _post_welcome(update, context, p):
-    """Deep link se aaya user — 1-2 line text + har channel ka Join button."""
-    name = p.get("Name") or "this"
-    prompt = (
-        f"Ek banda {p.get('type', 'post').lower()} '{name}' dekhne aaya hai. "
-        "Write a short 1-2 line warm welcome for them (in their language). "
-        "No markdown, minimal emoji."
-    )
-    line = ""
+async def _welcome_upgrade(context, msg, name, p, kb):
+    """Background me AI se behtar line lo aur message edit kar do.
+    Message pehle hi turant ja chuka hota hai — isliye koi delay nahi."""
     try:
-        line = await ask_ai(prompt, mem_key=None)
-    except Exception:
-        line = ""
-    if not line or line == busy_message():
-        line = f"Join the channel for {name}."
+        line = await ask_ai(
+            f"Ek banda {p.get('type', 'post').lower()} '{name}' dekhne aaya hai. "
+            "Write a short 1-2 line warm welcome for them (in their language). "
+            "No markdown, minimal emoji.", mem_key=None)
+        if line and line != busy_message():
+            await msg.edit_text(f"{line}\n\n{fonts.bold(name)}", reply_markup=kb)
+    except Exception as e:
+        log.info("Welcome AI upgrade skip: %s", e)
+
+
+async def _post_welcome(update, context, p):
+    """Deep link se aaya user — TURANT text + Join button (koi AI wait nahi).
+    AI ki line background me aati hai aur baad me edit ho jaati hai."""
+    name = p.get("Name") or "this"
     rows = []
     link = _as_url(p.get("Link"))          # user ne jo Link diya wahi join target
     if link:
@@ -2417,8 +2425,13 @@ async def _post_welcome(update, context, p):
                 rows.append([InlineKeyboardButton(JOIN_BUTTON_TEXT, url=url)])
     if not rows:
         rows = [[InlineKeyboardButton(JOIN_BUTTON_TEXT, url="https://t.me")]]
-    await update.effective_message.reply_text(
-        f"{line}\n\n{fonts.bold(name)}", reply_markup=InlineKeyboardMarkup(rows))
+    kb = InlineKeyboardMarkup(rows)
+    sent = await update.effective_message.reply_text(
+        f"Join the channel for {name}.\n\n{fonts.bold(name)}", reply_markup=kb)
+    try:
+        asyncio.create_task(_welcome_upgrade(context, sent, name, p, kb))
+    except Exception:
+        pass
 
 
 async def cmd_posts(update: Update, context: ContextTypes.DEFAULT_TYPE):
