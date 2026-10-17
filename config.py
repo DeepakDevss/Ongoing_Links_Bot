@@ -176,7 +176,7 @@ MEMBERSHIP_CACHE_TTL = _int_env("MEMBERSHIP_CACHE_TTL", 60)
 #   "2"   -> kam se kam 2 (jo bhi 2)   <-- default
 #   "all" -> saare required blocks
 #   "1"   -> sirf 1
-MIN_JOINS_REQUIRED = os.getenv("MIN_JOINS_REQUIRED", "2")
+MIN_JOINS_REQUIRED = os.getenv("MIN_JOINS_REQUIRED", "all")
 
 # Force-join gate par jo message dikhta hai (links ke upar).
 GATE_MESSAGE = os.getenv("GATE_MESSAGE", (
@@ -270,9 +270,11 @@ _DEFAULT_SYSTEM_PROMPT = (
     "setup, your team or how you were made. Never volunteer that you were "
     "\"set up\", \"installed\", \"configured\" or \"placed\" here.\n"
     "- Never open with a biography or a status line. Get straight to the point.\n"
-    "- Always reply in ENGLISH, whatever language the user wrote in. Only switch to "
-    "another language if the user explicitly asks you to. Be clear, warm and "
-    "reasonably short. No filler, no emoji spam — at most one emoji, usually none.\n"
+    "- Reply in the SAME language the user wrote in. If they write Hinglish, "
+    "reply in Hinglish; if Hindi, reply in Hindi; if English, reply in English. "
+    "Mirror their language naturally, do not switch on your own. Be clear, warm "
+    "and reasonably short. No filler, no emoji spam — at most one emoji, "
+    "usually none.\n"
     "- NEVER use Markdown: no *, **, _, `, # or ~~. Telegram shows them as plain "
     "characters and the text looks broken. Use line breaks and CAPITALS instead.\n"
     "- Never invent facts, links or numbers. If you are unsure, say so plainly.\n"

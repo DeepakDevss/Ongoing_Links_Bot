@@ -17,7 +17,7 @@ The force-join check runs in both private and group chats, so adding the bot to 
 
 ## Features
 
-- **Force-join gate** — Users must join the configured channels before the bot will respond. **Private chats only** — in groups the bot just answers.
+- **Force-join gate, only on post links.** Chatting with the bot needs **no** joins at all. The gate appears only when someone opens the bot through a `/post` deep link — they must join (or request) the channels before the post's real link is handed over.
 - **Sending a join request is enough.** The bot records `chat_join_request` events, so a user who has *requested* to join counts as joined, even before an admin approves.
 - **Owner approval of join requests** — Each incoming join request is sent to the owner with the requester's details and an Approve button. Nothing is auto-approved.
 - **Welcome message** — New members get a photo caption welcome.
@@ -337,17 +337,29 @@ delete that variable to pick up the new default.
 
 ## Force-Join Gate
 
-The gate is checked in **private chats only** — groups are never gated, so a member who
-@-mentions the bot just gets an answer.
+**The gate is not used for chatting.** Plain DMs, `/start` and `/ai` all work with zero joins. The
+gate runs in exactly one place: when someone arrives through a **`/post` deep link**.
+
+That flow is:
+
+1. The post carries a button whose URL is `https://t.me/<bot>?start=p<code>`.
+2. Tapping it opens the bot and `/start` runs automatically.
+3. The **gate** appears — the channel buttons plus **Joined / Verify**.
+4. Tapping *Joined / Verify* checks the channels. If the user has not joined or requested them, the
+   bot sends the join prompt again (same buttons, same verify button).
+5. Once verified, the bot finally shows the post's **Request to Join** button, which opens the link.
 
 A user passes if they are a member **or** have sent a join request (`chat_join_request`), which the
 bot remembers itself — the Bot API has no way to list pending requests.
+
+`MIN_JOINS_REQUIRED` defaults to `all`, so every channel listed with `require_join: true` must be
+joined or requested.
 
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
 - Colours are sent through `api_kwargs` (`_btn()` in `bot.py`), not PTB's `style=` parameter — that parameter only exists from PTB 22.7, and on older versions the colour used to disappear silently. The `api_kwargs` route works on any PTB version.
 - The startup log prints the real button payload, so you can see exactly what is being sent.
-- `MIN_JOINS_REQUIRED` sets how many of the listed chats must be joined before access is granted.
+- `MIN_JOINS_REQUIRED` sets how many of the listed chats must be joined or requested (`all` by default).
 - `JOIN_FAIL_MODE` defines what happens when the membership check can't be completed — for example, when the bot lacks permission to query membership or the Telegram API is unreachable. Two common modes are to fail open (allow access) or fail closed (deny access).
 - `/diag` reports the current state of the gate so misconfiguration can be spotted quickly.
 - `/getid` and `/setid` are used to discover and correct chat IDs used by the gate.
@@ -365,6 +377,9 @@ two links (`AI_BOT_LINK`, `COMMUNITY_LINK`) and is given concrete triggers for w
 On any other question it must not bring them up at all — not on a random or unrelated question, not
 as a footer or signature, never twice, at most once per chat, and never as a raw URL inside a
 welcome. If a link looks blocked it falls back to plain `t.me/...` text.
+
+The bot **replies in whatever language the user writes in** — Hinglish gets Hinglish, Hindi gets
+Hindi, English gets English. It mirrors the user rather than switching on its own.
 
 > **If you set `AI_SYSTEM_PROMPT` in your Render environment, it overrides this whole prompt** and
 > none of the above applies. The bot logs which one is in use at startup — look for `AI prompt:` in

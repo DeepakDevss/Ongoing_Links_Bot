@@ -909,10 +909,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # /post ka deep link: /start p<code>
+    #   Flow: link click -> bot chat (auto start) -> PEHLE channel gate
+    #   (4 links join/request) -> pass hone par hi asli "Request to Join" link.
     if context.args and context.args[0].startswith("p"):
-        p = db_post_get(context.args[0][1:])
+        code = context.args[0][1:]
+        p = db_post_get(code)
         if p:
-            await _post_welcome(update, context, p)
+            if await needs_join(context, user.id):
+                _pending_post[user.id] = code
+                _prune(_pending_post, 5000)
+                await send_join_gate(update, context)
+            else:
+                await _post_welcome(update, context, p)
             return
 
     # Referral: /start ref_12345
@@ -937,14 +945,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 pass
 
-    if await needs_join(context, user.id):
-        await send_join_gate(update, context)
-    else:
-        # Menu nahi — seedha chat.
-        await update.effective_message.reply_text(
-            f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
-            f"I am {fonts.bold(BOT_BRAND)}. Just type your question."
-        )
+    # DM me bot se baat karne ke liye koi join/request zaroori NAHI.
+    await update.effective_message.reply_text(
+        f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
+        f"I am {fonts.bold(BOT_BRAND)}. Just type your question."
+    )
 
 
 # (command, short description, min role)   role: member | admin | owner
@@ -1532,10 +1537,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _prune(_passed, 10000)
     if unknown and not joined and not missing:
         await _warn_admin_unverifiable(context, unknown)
+
+    # Post deep link se aaya tha? Ab asli link (Request to Join) do.
+    code = _pending_post.pop(user.id, None)
+    p = db_post_get(code) if code else None
+    if p:
+        await _post_welcome(update, context, p, chat_id=update.effective_chat.id)
     try:
         await q.message.delete()
     except Exception as e:
         log.warning("Gate delete fail: %s", e)
+    if not p:
         try:
             await q.edit_message_text("Verified. Now just type your question.")
         except Exception:
@@ -1715,9 +1727,6 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     if user.id in _post_flow:
         await _post_step(update, context)
-        return
-    if await needs_join(context, user.id):
-        await send_join_gate(update, context)
         return
     if not _ai_allowed(user.id):
         await update.effective_message.reply_text(
@@ -2042,9 +2051,6 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("Use: /ai <question>")
         return
     uid = update.effective_user.id
-    if await needs_join(context, uid):
-        await send_join_gate(update, context)
-        return
     if not _ai_allowed(uid):
         await update.effective_message.reply_text(
             f"{fonts.small_caps('Slow down')} — {fonts.small_caps('try again in a little while')}.")
@@ -2096,6 +2102,8 @@ async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #   wo 1-2 line text + har channel ka "Request to Join" button bhejta hai.
 # ---------------------------------------------------------------------
 _post_flow: dict = {}      # user_id -> {"type","step","data","channels","image","await_*"}
+# Post deep link se aaye par abhi gate paar na kiya ho -> user_id: code
+_pending_post: dict = {}
 
 
 def db_post_save(code, data):
@@ -2579,9 +2587,10 @@ async def _welcome_upgrade(context, msg, name, p, kb):
         log.info("Welcome AI upgrade skip: %s", e)
 
 
-async def _post_welcome(update, context, p):
+async def _post_welcome(update, context, p, chat_id=None):
     """Deep link se aaya user — TURANT text + Join button (koi AI wait nahi).
-    AI ki line background me aati hai aur baad me edit ho jaati hai."""
+    AI ki line background me aati hai aur baad me edit ho jaati hai.
+    chat_id diya ho (gate callback se) to wahan bhejo, warna reply karo."""
     name = p.get("Name") or "this"
     rows = []
     link = _as_url(p.get("Link"))          # user ne jo Link diya wahi join target
@@ -2595,9 +2604,12 @@ async def _post_welcome(update, context, p):
     if not rows:
         rows = [[_btn(JOIN_BUTTON_TEXT, url="https://t.me", style="primary")]]
     kb = InlineKeyboardMarkup(rows)
-    sent = await update.effective_message.reply_text(
-        f"{fonts.bold(name)}\n\n"
-        f"{fonts.small_caps('tap below to open the channel')}", reply_markup=kb)
+    txt = (f"{fonts.bold(name)}\n\n"
+           f"{fonts.small_caps('tap below to open the channel')}")
+    if chat_id:
+        sent = await context.bot.send_message(chat_id, txt, reply_markup=kb)
+    else:
+        sent = await update.effective_message.reply_text(txt, reply_markup=kb)
     try:
         asyncio.create_task(_welcome_upgrade(context, sent, name, p, kb))
     except Exception:
