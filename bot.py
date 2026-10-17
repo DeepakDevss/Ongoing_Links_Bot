@@ -122,7 +122,8 @@ _db_lock = threading.Lock()
 
 def _db_default():
     return {"users": {}, "referrals": {}, "banned": [],
-            "stats": {"total_started": 0}, "chat_ids": {}, "chats": {}}
+            "stats": {"total_started": 0}, "chat_ids": {}, "chats": {},
+            "requests": {}}
 
 
 def _now():
@@ -234,6 +235,37 @@ def db_add_user(user, bump_start=False):
             data["stats"]["total_started"] = data["stats"].get("total_started", 0) + 1
         _db_save(data)
         return is_new
+
+
+_requests_cache = None
+
+
+def _requests():
+    """{user_id: [chat_id, ...]} — jinhone join REQUEST bhej di hai."""
+    global _requests_cache
+    if _requests_cache is None:
+        with _db_lock:
+            _requests_cache = dict(_db_load().get("requests", {}))
+    return _requests_cache
+
+
+def db_add_request(user_id, chat_id):
+    global _requests_cache
+    with _db_lock:
+        d = _db_load()
+        r = d.setdefault("requests", {})
+        lst = r.setdefault(str(user_id), [])
+        if int(chat_id) not in lst:
+            lst.append(int(chat_id))
+        for k in list(r.keys())[: max(0, len(r) - 5000)]:
+            r.pop(k, None)                      # bound rakho
+        _db_save(d)
+        _requests_cache = dict(r)
+
+
+def has_request(user_id, chat_id) -> bool:
+    """User ne is chat me join request bhej di hai? (join na hua ho tab bhi)."""
+    return int(chat_id) in _requests().get(str(user_id), [])
 
 
 def db_user_exists(uid) -> bool:
@@ -685,6 +717,8 @@ async def join_status(context, user_id, force=False):
     joined, missing, unknown = [], [], []
     for chat in enforced_blocks():
         r = await _is_member(context, chat["id"], user_id, force=force)
+        if r is False and has_request(user_id, chat["id"]):
+            r = True      # join REQUEST bhej di -> pass (join hona zaroori nahi)
         if r is True:
             joined.append(chat)
         elif r is False:
@@ -716,6 +750,15 @@ async def needs_join(context, user_id, force=False) -> bool:
     return user_id not in _passed
 
 
+def _btn(label, **kw):
+    """InlineKeyboardButton — `style` support ho to lagao (purane PTB par nahi)."""
+    try:
+        return InlineKeyboardButton(label, **kw)
+    except TypeError:
+        kw.pop("style", None)
+        return InlineKeyboardButton(label, **kw)
+
+
 def link_keyboard(extra_rows=None):
     """config.py ke LINK_BLOCKS se buttons banao.
     Jinke "row" number same hai, wo ek hi row mein (side-by-side) aate hain."""
@@ -728,7 +771,7 @@ def link_keyboard(extra_rows=None):
             by_row[r] = []
             order.append(r)
         label = f"{b['emoji']} {fonts.bold(b['name'])}" if b.get("emoji") else fonts.bold(b["name"])
-        by_row[r].append(InlineKeyboardButton(label, url=b["url"]))
+        by_row[r].append(_btn(label, url=b["url"], style="primary"))   # blue
     for r in order:
         rows.append(by_row[r])
     if extra_rows:
@@ -754,7 +797,7 @@ def build_welcome(member, chat_title: str) -> str:
 async def send_join_gate(update: Update, context, edit=False):
     text = GATE_MESSAGE
     kb = link_keyboard(extra_rows=[
-        [InlineKeyboardButton(GATE_BUTTON_TEXT, callback_data="check_join")],
+        [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
     ])
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb)
@@ -1479,13 +1522,20 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             caption = build_welcome(member, msg.chat.title)
+        sent = False
         try:
             with open(WELCOME_IMAGE, "rb") as photo:
-                await msg.reply_photo(photo=photo, caption=caption)
+                await context.bot.send_photo(chat_id=msg.chat_id, photo=photo, caption=caption)
+            sent = True
         except FileNotFoundError:
-            await msg.reply_text(caption)
+            log.warning("Welcome image nahi mili: %s", WELCOME_IMAGE)
         except Exception as e:
-            log.warning("Welcome send fail: %s", e)
+            log.warning("Welcome photo fail (%s): %s", msg.chat_id, e)
+        if not sent:
+            try:
+                await context.bot.send_message(chat_id=msg.chat_id, text=caption)
+            except Exception as e:
+                log.warning("Welcome text fail (%s): %s", msg.chat_id, e)
 
 
 # =====================================================================
@@ -1502,6 +1552,8 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     b = match_block_by_title(chat.title) if chat.title else None
     if b:
         db_set_chat_id(b["name"], chat.id)
+    # Request bhej diya -> gate is chat ke liye pass ho jayega.
+    db_add_request(usr.id, chat.id)
 
     # Join request OWNER ko nahi — ADMIN 1 (ADMIN_IDS[0]) ko jaati hai.
     target = ADMIN_IDS[0] if ADMIN_IDS else (OWNER_ID or 0)
@@ -1654,13 +1706,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mentioned = True
     if not mentioned:
         return
-    if await needs_join(context, update.effective_user.id):
-        await msg.reply_text(
-            f"{fonts.small_caps('Please join our channels first')} — "
-            "tap the buttons below, then ask me again.",
-            reply_markup=link_keyboard(),
-        )
-        return
+    # Group/channel me gate NAHI — wahan seedha jawab do (gate sirf DM me).
     if not _ai_allowed(update.effective_user.id):
         return   # group me chupchaap skip (group spam na ho)
     prompt = _strip_mention(msg.text, me.username) or "The user mentioned you. Greet them warmly."

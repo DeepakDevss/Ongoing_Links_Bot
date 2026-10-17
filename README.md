@@ -17,7 +17,8 @@ The force-join check runs in both private and group chats, so adding the bot to 
 
 ## Features
 
-- **Force-join gate** — Users must join the configured channels before the bot will respond. Applies in private chats and in groups.
+- **Force-join gate** — Users must join the configured channels before the bot will respond. **Private chats only** — in groups the bot just answers.
+- **Sending a join request is enough.** The bot records `chat_join_request` events, so a user who has *requested* to join counts as joined, even before an admin approves.
 - **Owner approval of join requests** — Each incoming join request is sent to the owner with the requester's details and an Approve button. Nothing is auto-approved.
 - **Welcome message** — New members get a photo caption welcome.
 - **AI chat** — Every private message gets an AI reply. In groups, the bot replies only when @mentioned.
@@ -321,13 +322,26 @@ turns the banner step off.
 
 ## Force-Join Gate
 
-The gate is checked on every user interaction, in both private chats and groups.
+The gate is checked in **private chats only** — groups are never gated, so a member who
+@-mentions the bot just gets an answer.
 
-- `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt.
+A user passes if they are a member **or** have sent a join request (`chat_join_request`), which the
+bot remembers itself — the Bot API has no way to list pending requests.
+
+- `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
+- The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
 - `MIN_JOINS_REQUIRED` sets how many of the listed chats must be joined before access is granted.
 - `JOIN_FAIL_MODE` defines what happens when the membership check can't be completed — for example, when the bot lacks permission to query membership or the Telegram API is unreachable. Two common modes are to fail open (allow access) or fail closed (deny access).
 - `/diag` reports the current state of the gate so misconfiguration can be spotted quickly.
 - `/getid` and `/setid` are used to discover and correct chat IDs used by the gate.
+
+### The AI's instructions
+
+`AI_SYSTEM_PROMPT` tells the bot it is **Ongoing**, built by Deepak working alone — it never claims a
+team, company or studio, and never volunteers that it was "set up" or "installed" anywhere. It knows
+two links (`AI_BOT_LINK`, `COMMUNITY_LINK`) and is told to share them **only when they genuinely
+help** — never at random, never as a footer, at most once per conversation — and to fall back to
+plain `t.me/...` text if a link looks blocked.
 
 ### How the bot learns a chat's ID
 

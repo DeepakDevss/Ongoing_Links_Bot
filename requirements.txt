@@ -1,4 +1,4 @@
-python-telegram-bot[rate-limiter,job-queue]>=22.0,<23
+python-telegram-bot[rate-limiter,job-queue]>=22.7,<23
 aiolimiter>=1.1
 google-genai>=2.0
 fastapi>=0.115.3
