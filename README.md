@@ -397,10 +397,15 @@ The gate is **strict and fails closed**:
 
 - *Request to Join* is handed over **only** when membership has actually been confirmed — joined **or**
   a join request on record.
-- If the bot cannot check at all (no chat id, or it is not an admin), it does **not** let anyone
-  through. It says it could not confirm membership, keeps the gate and its *Joined / Verify* button on
-  screen, and tells the owner. Nothing is handed out on an unverifiable check.
+- **Fail-closed.** If the bot cannot check at all — no chat id, **or it has an id but is not an admin
+  there**, so `getChatMember` errors — it does **not** let anyone through. It says it could not confirm
+  membership, keeps the gate and its *Joined / Verify* button on screen, and tells the owner. This was
+  a real bug: with ids present but no admin rights every check came back "unknown", the required count
+  collapsed to zero, and the gate silently passed people who had joined nothing.
 - The deep-link check ignores the membership cache, so a stale result can never let someone in.
+- **The keyboard shows progress.** After each *Joined / Verify* tap the channel buttons are redrawn —
+  a channel that is joined or has a request on record gets a `✓` and turns green, the rest stay blue.
+  So a member can see at a glance what is done and what is still missing.
 
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).

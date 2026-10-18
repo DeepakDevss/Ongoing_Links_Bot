@@ -843,9 +843,19 @@ def _btn(label, **kw):
     return InlineKeyboardButton(label, **kw)
 
 
-def link_keyboard(extra_rows=None):
+def _block_chat_id(blk):
+    """Us block ki chat id (config se ya runtime me seekhi hui)."""
+    cid = blk.get("id") or _learned_ids().get(blk["name"])
+    return int(cid) if cid else None
+
+
+def link_keyboard(extra_rows=None, joined=None):
     """config.py ke LINK_BLOCKS se buttons banao.
-    Jinke "row" number same hai, wo ek hi row mein (side-by-side) aate hain."""
+    Jinke "row" number same hai, wo ek hi row mein (side-by-side) aate hain.
+    `joined` = jin chat ids ki membership verify ho chuki (joined ya request) —
+    unke button par ✓ lagta hai aur wo green ho jate hain, taaki user ko turant
+    dikhe kaunsa channel ho gaya aur kaunsa baaki hai."""
+    done = {int(x) for x in (joined or [])}
     rows = []
     by_row: dict = {}
     order = []
@@ -854,8 +864,11 @@ def link_keyboard(extra_rows=None):
         if r not in by_row:
             by_row[r] = []
             order.append(r)
-        label = fonts.bold(b["name"])   # buttons par emoji nahi
-        by_row[r].append(_btn(label, url=b["url"], style="primary"))   # blue
+        cid = _block_chat_id(b)
+        ok = cid is not None and cid in done
+        label = ("✓ " if ok else "") + fonts.bold(b["name"])   # buttons par emoji nahi
+        by_row[r].append(_btn(label, url=b["url"],
+                              style="success" if ok else "primary"))
     for r in order:
         rows.append(by_row[r])
     if extra_rows:
@@ -878,11 +891,11 @@ def build_welcome(member, chat_title: str) -> str:
     )
 
 
-async def send_join_gate(update: Update, context, edit=False):
+async def send_join_gate(update: Update, context, edit=False, joined=None):
     text = GATE_MESSAGE
     kb = link_keyboard(extra_rows=[
         [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
-    ])
+    ], joined=joined)
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb)
     else:
@@ -1734,11 +1747,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # jaye. Do soorat me block:
     #   1) kuch channels join/request nahi hue
     #   2) bot check hi nahi kar paya (chat id nahi / bot admin nahi) -> FAIL CLOSED
+    # STRICT + FAIL-CLOSED. Pass sirf tab jab SACH ME verify ho gaya.
+    #   need == 0  -> bot kuch bhi check nahi kar paya (chat id nahi, ya bot us
+    #                 channel me ADMIN nahi). Iska matlab verify NAHI hua —
+    #                 pehle ye galti se PASS ho jata tha (user bina join kiye
+    #                 "verified" mil jata tha). Ab BLOCK.
+    #   joined < need -> kuch channels baaki hain -> BLOCK.
+    joined_ids = [c["id"] for c in joined]
     ready, no_id = gate_report()
-    blocked = (need > 0 and len(joined) < need) or (need == 0 and bool(no_id))
+    blocked = (need == 0) or (len(joined) < need)
     if blocked:
         await q.answer()
-        if need == 0 and no_id:
+        if need == 0:
             text = ("I could not confirm your membership yet. Please join the "
                     "channels below, then tap the button again.")
         else:
@@ -1748,13 +1768,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=text,
-            reply_markup=link_keyboard(extra_rows=[
-                [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
-            ]),
+            reply_markup=link_keyboard(
+                extra_rows=[[_btn(GATE_BUTTON_TEXT, callback_data="check_join",
+                                  style="success")]],
+                joined=joined_ids),
         )
-        if need == 0 and no_id:
+        if need == 0:
             await _warn_admin_unverifiable(
-                context, [blk for blk in LINK_BLOCKS if blk["name"] in no_id])
+                context, [blk for blk in LINK_BLOCKS
+                          if _block_chat_id(blk) is None
+                          or _block_chat_id(blk) not in joined_ids])
         return
 
     # Pass. (Ek hi baar answer karo — dobara answer karne par Telegram error deta hai.)
@@ -1775,8 +1798,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # Ye /start ka welcome tha (uspar bhi Verify button hai) — message
         # DELETE mat karo, warna welcome + 5 links gayab ho jayenge.
+        # Keyboard bhi update karo taaki sab par ✓ dikhe.
         try:
-            await q.edit_message_text("Verified. Now just type your question.")
+            await q.edit_message_text(
+                "Verified. Now just type your question.",
+                reply_markup=link_keyboard(
+                    extra_rows=[[_btn(GATE_BUTTON_TEXT, callback_data="check_join",
+                                      style="success")]],
+                    joined=[c["id"] for c in joined]))
         except Exception:
             pass
 
