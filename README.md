@@ -399,6 +399,10 @@ The gate is **strict and fails closed**:
 - **Every** button in the bot is coloured: the channel buttons, *Joined / Verify*, *Request to Join*,
   *Download & Watch*, the post builder's type/channel/Done/Post now/Schedule buttons, the *Share*
   button on `/ref`, and the Approve buttons.
+- Every keyboard is built through `_btn()`, so a button without a colour cannot be introduced by
+  accident. `/btnstyle` prints the exact JSON the bot sends, so the payload can be checked directly.
+- `style` needs **no** Telegram Premium and works in private chats, groups and supergroups alike —
+  the only requirement is a client released after 9 Feb 2026.
 - The startup log prints the real button payload, so you can see exactly what is being sent.
 - `MIN_JOINS_REQUIRED` sets how many of the listed chats must be joined or requested (`all` by default).
 - `JOIN_FAIL_MODE` defines what happens when the membership check can't be completed — for example, when the bot lacks permission to query membership or the Telegram API is unreachable. Two common modes are to fail open (allow access) or fail closed (deny access).
@@ -461,7 +465,7 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Users are always blocked | `MIN_JOINS_REQUIRED` higher than the number of configured chats | Lower the value or add the missing chat IDs |
 | Join buttons show wrong chats | `LINK_BLOCKS` or chat IDs are incorrect | Re-check IDs with `/getid` and update `config.py` |
 | Data resets after deploy | Ephemeral filesystem | Attach a persistent disk and set the database path to it |
-| Buttons have no colour | An old Telegram client | Button colour is a **client** feature — Telegram silently ignores `style` on clients older than 9 Feb 2026. Run `/btnstyle` (owner only): it sends three action buttons *and* two link buttons, all coloured, and prints the exact JSON the bot sends. Plain buttons there mean the app needs updating; plain **link** buttons only means the app colours action buttons but not link buttons |
+| Buttons have no colour | An old Telegram client, or you are looking at an **old message** | Button colour is a **client** feature — Telegram silently ignores `style` on clients older than 9 Feb 2026, and old messages keep the keyboard they were sent with. Two checks: (1) run `/btnstyle` — it sends three action buttons *and* two link buttons, all coloured, and prints the exact JSON being sent; (2) open **https://web.telegram.org** and run `/btnstyle` there — Telegram Web is always the newest build, so coloured buttons there prove the phone app is the old one. Also send `/start` fresh rather than scrolling back |
 | Bot still behaves like an older version | `AI_SYSTEM_PROMPT` set in the environment overrides the built-in prompt | Delete `AI_SYSTEM_PROMPT` from the Render environment |
 | Every AI reply says "busy" | `AI_API_KEY` is missing | The startup log warns about this explicitly — set the key |
 | Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |

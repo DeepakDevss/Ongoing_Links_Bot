@@ -2720,11 +2720,15 @@ async def cmd_btnstyle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         f"{fonts.bold('Button colour test')}\n\n"
         "Top 3 are action buttons, bottom 2 are link buttons.\n"
-        "All 5 should look coloured (blue / green / red).\n"
-        "If they all look plain, your Telegram app is older than 9 Feb 2026 — "
-        "update it.\n"
-        "If only the bottom 2 look plain, your app colours action buttons but "
-        "not link buttons.\n\n"
+        "All 5 should look coloured (blue / green / red).\n\n"
+        f"{fonts.bold('If they look plain, it is your app, not the bot.')}\n"
+        "Button colour is a CLIENT feature — Telegram silently ignores it on "
+        "apps older than 9 Feb 2026, and on old messages already in the chat.\n\n"
+        f"{fonts.bold('Two ways to be sure')}:\n"
+        "1. Open https://web.telegram.org in a browser and send /btnstyle "
+        "there. Telegram Web is always the latest build — if the buttons are "
+        "coloured there, your phone app is the old one.\n"
+        "2. Send /start fresh (old messages keep their old keyboard).\n\n"
         f"{fonts.small_caps('this is the payload the bot is sending')}:\n{payload[:280]}",
         reply_markup=kb)
 
