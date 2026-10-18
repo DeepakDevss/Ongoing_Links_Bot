@@ -423,8 +423,14 @@ _history: dict = {}
 
 def _hist(mem_key):
     """COPY return karo — warna background thread me iterate karte waqt
-    event loop list badal de to 'list changed size' error aa sakta hai."""
-    return list(_history.get(mem_key, []))
+    event loop list badal de to 'list changed size' error aa sakta hai.
+    LRU: padhne par key ko dict ke END me le jao, taaki active user
+    _prune() se evict na ho (pehle ye FIFO tha)."""
+    h = _history.get(mem_key)
+    if h is not None:
+        _history.pop(mem_key, None)
+        _history[mem_key] = h
+    return list(h or [])
 
 
 def _hist_add(mem_key, role, text):
@@ -644,9 +650,13 @@ _AI_MAX = 15
 
 
 def _ai_allowed(uid) -> bool:
-    """Ek user 60 second me max _AI_MAX AI calls kar sakta hai."""
+    """Ek user 60 second me max _AI_MAX AI calls kar sakta hai.
+    LRU: access par key end me — active user evict na ho."""
     now = time.time()
-    hits = _ai_hits.setdefault(uid, [])
+    hits = _ai_hits.pop(uid, None)
+    if hits is None:
+        hits = []
+    _ai_hits[uid] = hits
     while hits and now - hits[0] > _AI_WINDOW:
         hits.pop(0)
     if len(hits) >= _AI_MAX:
@@ -768,9 +778,11 @@ async def needs_join(context, user_id, force=False) -> bool:
     joined, _missing, _unknown, need = await join_status(context, user_id, force=force)
     if need > 0:
         return len(joined) < need
-    # Kuch bhi verify nahi ho sakta (IDs/bot-admin missing) -> gate sirf EK BAAR
-    # dikhao. Warna har message par gate dikhta rehta aur bot kabhi na chalta.
-    return user_id not in _passed
+    # Kuch bhi verify nahi ho paya (chat id nahi / bot admin nahi).
+    # Gate ko CHHUPAO MAT — pehle ye `_passed` dekh kar ek hi baar dikhta tha,
+    # isliye "Joined / Verify" button ek baar dikh kar hamesha gayab ho jata tha.
+    # Ab har baar dikhta hai, aur user ko aage bhi badhne dete hain (atkega nahi).
+    return True
 
 
 # Kya button colour sach me payload me ja raha hai? (PTB version ki parwah nahi)
@@ -2840,6 +2852,9 @@ async def _polling_post_init(app: Application):
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "PASTE_YOUR_BOT_TOKEN_HERE":
         raise SystemExit("BOT_TOKEN is not set. Check config.py / your Environment Variables.")
+    if not AI_API_KEY or AI_API_KEY == "PASTE_YOUR_AI_API_KEY_HERE":
+        log.warning("AI_API_KEY is not set — the bot will start, but every AI reply "
+                    "will be the 'busy' message. Set AI_API_KEY in your environment.")
     app = build_application()
     if WEBHOOK_URL:
         log.info("Starting in WEBHOOK mode (Render).")

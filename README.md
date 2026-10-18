@@ -382,6 +382,10 @@ The easiest fix is to **add the bot as an admin in each channel** — it learns 
 added. If the channel title does not match a block name, bind it by hand with `/setid` (get the id
 from `/getid` by forwarding a message, or copy it from `/chats`).
 
+While the gate cannot verify anything it **keeps showing** — the *Joined / Verify* button stays on
+screen every time a post link is opened, rather than vanishing after the first tap. The user is still
+let through, so a half-configured gate never locks a reader out of a post.
+
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
 - Colours are sent through `api_kwargs` (`_btn()` in `bot.py`), not PTB's `style=` parameter — that parameter only exists from PTB 22.7, and on older versions the colour used to disappear silently. The `api_kwargs` route works on any PTB version.
@@ -449,6 +453,7 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Data resets after deploy | Ephemeral filesystem | Attach a persistent disk and set the database path to it |
 | Buttons have no colour | An old Telegram client | Run `/btnstyle` (owner only) — it sends blue/green/red buttons and prints the exact JSON the bot sends. If those are plain too, your Telegram app predates 9 Feb 2026 and needs updating |
 | Bot still behaves like an older version | `AI_SYSTEM_PROMPT` set in the environment overrides the built-in prompt | Delete `AI_SYSTEM_PROMPT` from the Render environment |
+| Every AI reply says "busy" | `AI_API_KEY` is missing | The startup log warns about this explicitly — set the key |
 | Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |
 
 ---
