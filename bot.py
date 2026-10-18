@@ -747,9 +747,6 @@ async def join_status(context, user_id, force=False):
     return joined, missing, unknown, need
 
 
-# jin users ne gate ek baar paar kar liya (jab verify possible hi nahi hai)
-_passed: set = set()
-
 # chat_id -> bot ka last dekha status (duplicate notification rokne ke liye)
 _chat_status: dict = {}
 
@@ -779,9 +776,9 @@ async def needs_join(context, user_id, force=False) -> bool:
     if need > 0:
         return len(joined) < need
     # Kuch bhi verify nahi ho paya (chat id nahi / bot admin nahi).
-    # Gate ko CHHUPAO MAT — pehle ye `_passed` dekh kar ek hi baar dikhta tha,
-    # isliye "Joined / Verify" button ek baar dikh kar hamesha gayab ho jata tha.
-    # Ab har baar dikhta hai, aur user ko aage bhi badhne dete hain (atkega nahi).
+    # Gate ko CHHUPAO MAT — pehle ye ek hi baar dikhta tha, isliye
+    # "Joined / Verify" button ek baar dikh kar hamesha gayab ho jata tha.
+    # Ab har baar dikhta hai. (Verify fail-closed hai — link tab tak nahi milega.)
     return True
 
 
@@ -956,6 +953,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await _post_welcome(update, context, p)
             return
+        # Post nahi mili (DB reset / code purana) — chup na raho, batao.
+        await update.effective_message.reply_text(
+            "This post link has expired or is no longer available.")
+        return
 
     # Referral: /start ref_12345
     if context.args:
@@ -985,7 +986,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
         f"I am {fonts.bold(BOT_BRAND)}. Just type your question.\n\n"
         f"{fonts.small_caps('our channels')}:",
-        reply_markup=link_keyboard(),
+        reply_markup=link_keyboard(extra_rows=[
+            [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
+        ]),
     )
 
 
@@ -1611,8 +1614,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Pass. (Ek hi baar answer karo — dobara answer karne par Telegram error deta hai.)
     await q.answer()
-    _passed.add(user.id)
-    _prune(_passed, 10000)
     log.info("Gate PASSED for %s (%s/%s joined)", user.id, len(joined), need)
     if unknown and not joined and not missing:
         await _warn_admin_unverifiable(context, unknown)
@@ -1622,11 +1623,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = db_post_get(code) if code else None
     if p:
         await _post_welcome(update, context, p, chat_id=update.effective_chat.id)
-    try:
-        await q.message.delete()
-    except Exception as e:
-        log.warning("Gate delete fail: %s", e)
-    if not p:
+        try:
+            await q.message.delete()          # gate message hata do
+        except Exception as e:
+            log.warning("Gate delete fail: %s", e)
+    else:
+        # Ye /start ka welcome tha (uspar bhi Verify button hai) — message
+        # DELETE mat karo, warna welcome + 5 links gayab ho jayenge.
         try:
             await q.edit_message_text("Verified. Now just type your question.")
         except Exception:
@@ -1647,14 +1650,19 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if member.is_bot:
             continue
         if WELCOME_TEMPLATE:
-            caption = WELCOME_TEMPLATE.format(
-                first_name=member.first_name or "Member",
-                group_name=msg.chat.title or "the group",
-                full_name=member.full_name or member.first_name or "Member",
-                user_id=member.id,
-                join_date=_today(),
-                bot_brand=BOT_BRAND,
-            )
+            try:
+                caption = WELCOME_TEMPLATE.format(
+                    first_name=member.first_name or "Member",
+                    group_name=msg.chat.title or "the group",
+                    full_name=member.full_name or member.first_name or "Member",
+                    user_id=member.id,
+                    join_date=_today(),
+                    bot_brand=BOT_BRAND,
+                )
+            except Exception as e:
+                # Env me galat {placeholder} ho to welcome fail na ho.
+                log.warning("WELCOME_TEMPLATE galat hai (%s) — default use kar raha hoon.", e)
+                caption = build_welcome(member, msg.chat.title)
         else:
             caption = build_welcome(member, msg.chat.title)
         sent = False
@@ -2702,15 +2710,21 @@ async def cmd_btnstyle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id):
         return
     kb = InlineKeyboardMarkup([
-        [_btn("Blue — primary", callback_data="bs:p", style="primary")],
-        [_btn("Green — success", callback_data="bs:s", style="success")],
-        [_btn("Red — danger", callback_data="bs:d", style="danger")],
+        [_btn("Callback · blue", callback_data="bs:p", style="primary")],
+        [_btn("Callback · green", callback_data="bs:s", style="success")],
+        [_btn("Callback · red", callback_data="bs:d", style="danger")],
+        [_btn("Link · blue", url="https://t.me/telegram", style="primary")],
+        [_btn("Link · green", url="https://t.me/telegram", style="success")],
     ])
     payload = json.dumps(kb.to_dict())
     await update.effective_message.reply_text(
         f"{fonts.bold('Button colour test')}\n\n"
-        "The three buttons should look coloured (blue, green, red).\n"
-        "If they all look plain, your Telegram app is out of date.\n\n"
+        "Top 3 are action buttons, bottom 2 are link buttons.\n"
+        "All 5 should look coloured (blue / green / red).\n"
+        "If they all look plain, your Telegram app is older than 9 Feb 2026 — "
+        "update it.\n"
+        "If only the bottom 2 look plain, your app colours action buttons but "
+        "not link buttons.\n\n"
         f"{fonts.small_caps('this is the payload the bot is sending')}:\n{payload[:280]}",
         reply_markup=kb)
 

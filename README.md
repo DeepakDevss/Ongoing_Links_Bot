@@ -337,9 +337,10 @@ delete that variable to pick up the new default.
 
 ## Force-Join Gate
 
-**The gate is not used for chatting.** Plain DMs, `/start` and `/ai` all work with zero joins — and
-plain `/start` still shows the five channel buttons, so people can join if they want to. The gate runs
-in exactly one place: when someone arrives through a **`/post` deep link**.
+**The gate is not used for chatting.** Plain DMs, `/start` and `/ai` all work with zero joins. Plain
+`/start` shows the five channel buttons **plus the same *Joined / Verify* button**, so anyone can check
+their membership at any time — but nothing is withheld for chatting. The gate *runs* in exactly one
+place: when someone arrives through a **`/post` deep link**.
 
 That flow is:
 
@@ -460,7 +461,7 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Users are always blocked | `MIN_JOINS_REQUIRED` higher than the number of configured chats | Lower the value or add the missing chat IDs |
 | Join buttons show wrong chats | `LINK_BLOCKS` or chat IDs are incorrect | Re-check IDs with `/getid` and update `config.py` |
 | Data resets after deploy | Ephemeral filesystem | Attach a persistent disk and set the database path to it |
-| Buttons have no colour | An old Telegram client | Run `/btnstyle` (owner only) — it sends blue/green/red buttons and prints the exact JSON the bot sends. If those are plain too, your Telegram app predates 9 Feb 2026 and needs updating |
+| Buttons have no colour | An old Telegram client | Button colour is a **client** feature — Telegram silently ignores `style` on clients older than 9 Feb 2026. Run `/btnstyle` (owner only): it sends three action buttons *and* two link buttons, all coloured, and prints the exact JSON the bot sends. Plain buttons there mean the app needs updating; plain **link** buttons only means the app colours action buttons but not link buttons |
 | Bot still behaves like an older version | `AI_SYSTEM_PROMPT` set in the environment overrides the built-in prompt | Delete `AI_SYSTEM_PROMPT` from the Render environment |
 | Every AI reply says "busy" | `AI_API_KEY` is missing | The startup log warns about this explicitly — set the key |
 | Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |
