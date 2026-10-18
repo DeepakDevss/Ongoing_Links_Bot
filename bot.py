@@ -1059,34 +1059,35 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # (command, short description, min role)   role: member | admin | owner
 # POSTCMD = POST_COMMAND ka placeholder (naam config se aata hai).
 _COMMANDS = [
-    ("start",       "bot start / force-join gate",                 "member"),
-    ("help",        "this message",                                  "member"),
-    ("id",          "your Telegram ID",                            "member"),
-    ("ref",         "referral link + invite count",                "member"),
-    ("rules",       "view the rules",                                 "member"),
-    ("ai",          "ask the AI directly:  /ai <question>",           "member"),
-    ("report",      "reply to a message to report it",         "member"),
-    ("stats",       "bot statistics",                           "owner"),
-    ("getid",       "get a chat ID (forward a message)",  "owner"),
-    ("setid",       "set a block ID:  /setid <block> <id>",  "owner"),
-    ("diag",        "full gate and chat status",                "owner"),
-    ("chats",       "list every chat the bot is in",             "owner"),
-    ("perms",       "bot permissions in this chat, with meanings",      "owner"),
-    ("admins",      "team list",                               "admin"),
-    ("list_admins", "same as /admins",                             "admin"),
-    ("settitle",    "rename the group:  /settitle <name>",      "admin"),
-    ("invitelink",  "create an invite link",                   "admin"),
-    ("kick",        "kick/ban a member:  /kick <user_id>",        "admin"),
-    ("unkick",      "remove a kick/ban:  /unkick <user_id>",          "admin"),
-    ("del",         "delete the replied-to message",              "admin"),
-    ("pin",         "pin the replied-to message",                 "admin"),
-    ("promote",     "promote a member:  /promote <user_id>",  "admin"),
-    ("POSTCMD",     "build a post (with a tracked deep link)",        "admin"),
-    ("posts",       "list built posts",                      "admin"),
-    ("btnstyle",    "button colour test",                     "owner"),
-    ("broadcast",   "message all users",                  "owner"),
-    ("ban",         "bot-wide ban:  /ban <user_id>",               "owner"),
-    ("unban",       "remove a ban:  /unban <user_id>",                "owner"),
+    # ---- member ----
+    ("start",    "open the bot, see our channels and verify your join",  "member"),
+    ("help",     "show the commands you can use",                        "member"),
+    ("id",       "show your Telegram user ID",                           "member"),
+    ("ai",       "ask the assistant directly:  /ai <question>",          "member"),
+    ("rules",    "read the community rules",                             "member"),
+    ("report",   "reply to a message to report it to the admins",        "member"),
+    ("ref",      "your invite link and how many people joined through it", "member"),
+    # ---- admin ----
+    ("admins",     "list the team (owner and admins)",                   "admin"),
+    ("settitle",   "rename this group:  /settitle <new name>",           "admin"),
+    ("invitelink", "create a fresh invite link for this chat",           "admin"),
+    ("kick",       "remove someone:  /kick <user_id>",                   "admin"),
+    ("unkick",     "undo a kick or ban:  /unkick <user_id>",             "admin"),
+    ("del",        "delete a message - reply to it with /del",           "admin"),
+    ("pin",        "pin a message - reply to it with /pin",              "admin"),
+    ("promote",    "make someone an admin:  /promote <user_id>",         "admin"),
+    ("POSTCMD",    "build a channel post with a tracked download link",  "admin"),
+    ("posts",      "list the posts you have built",                      "admin"),
+    # ---- owner ----
+    ("stats",     "bot and community overview, with live member counts",  "owner"),
+    ("diag",      "full setup check: join gate, chat IDs, permissions",   "owner"),
+    ("chats",     "every chat the bot is in, with its ID and type",       "owner"),
+    ("perms",     "what the bot is allowed to do in this chat",           "owner"),
+    ("getid",     "get a chat's numeric ID - forward a message from it",  "owner"),
+    ("setid",     "bind a block to a chat ID:  /setid <block> <ID>",      "owner"),
+    ("broadcast", "message everyone who has started the bot",             "owner"),
+    ("ban",       "ban someone from the bot:  /ban <user_id>",            "owner"),
+    ("unban",     "lift a bot ban:  /unban <user_id>",                    "owner"),
 ]
 
 
@@ -1107,7 +1108,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         star = "★ " if (lvl == 2 and rank[r] == 2) else ""
         out.append(f"{star}/{name} — {d}")
     out.append("")
-    out.append(f"{sc('chat')}: just type in DM. In a group, mention {BOT_USERNAME}.")
+    _uname = ("@" + context.bot.username) if getattr(context.bot, "username", None) else BOT_USERNAME
+    out.append(f"{sc('chat')}: just type in DM. In a group, mention {_uname}.")
     if lvl >= 1:
         out.append(f"{sc('group commands only work in a group — the bot must be an admin there')}")
     if lvl == 2:
@@ -1142,16 +1144,53 @@ async def cmd_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # -------- admin --------
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner: poora overview — apne users, AUR har channel ka LIVE member count
+    (getChatMemberCount se — Telegram ka asli aankda, guess nahi)."""
     if not await _need_owner(update):
         return
+    sc, bd = fonts.small_caps, fonts.bold
     s = db_stats()
-    await update.effective_message.reply_text(
-        f"{fonts.small_caps('Bot stats')}\n\n"
-        f"{fonts.small_caps('Total users')}: {fonts.bold(str(s['total_users']))}\n"
-        f"{fonts.small_caps('Total started')}: {fonts.bold(str(s['total_started']))}\n"
-        f"{fonts.small_caps('Total referrals')}: {fonts.bold(str(s['referrals']))}\n"
-        f"{fonts.small_caps('Banned')}: {fonts.bold(str(s['banned']))}"
-    )
+    out = [bd("STATS"), "", bd("YOUR BOT"), ""]
+    out.append(f"{sc('users who started')} : {bd(str(s['total_users']))}")
+    out.append(f"{sc('reachable by DM')}   : {bd(str(max(0, s['total_users'] - s['banned'])))}")
+    out.append(f"{sc('banned')}            : {bd(str(s['banned']))}")
+    out.append(f"{sc('/start count')}     : {bd(str(s['total_started']))}")
+    out.append(f"{sc('referrals')}         : {bd(str(s['referrals']))}")
+
+    # Channels — Telegram se LIVE member count
+    learned = _learned_ids()
+    out += ["", bd("YOUR CHANNELS"), ""]
+    total_members = 0
+    counted = 0
+    for blk in LINK_BLOCKS:
+        cid = blk.get("id") or learned.get(blk["name"])
+        if not cid:
+            out.append(f"{blk['name']}  -  {sc('no chat ID yet')}")
+            continue
+        try:
+            n = await context.bot.get_chat_member_count(cid)
+            total_members += int(n)
+            counted += 1
+            out.append(f"{blk['name']}  -  {bd(str(n))} {sc('members')}")
+        except Exception as e:
+            out.append(f"{blk['name']}  -  {sc('?')} ({_err_hint(e)})")
+    if counted:
+        out += ["", f"{sc('total across channels')} : {bd(str(total_members))}"]
+
+    # Chats by type
+    chats = db_get_chats()
+    by_type = {}
+    for c in chats.values():
+        t = str(c.get("type") or "?")
+        by_type[t] = by_type.get(t, 0) + 1
+    out += ["", bd("CHATS THE BOT IS IN"),
+            f"{sc('total')} : {bd(str(len(chats)))}"]
+    for t, n in sorted(by_type.items()):
+        out.append(f"   {sc(t)} : {bd(str(n))}")
+    if not counted:
+        out += ["", f"{sc('tip')}: make the bot an ADMIN in a channel and its "
+                    "member count shows up here."]
+    await _send_long(update.effective_message, "\n".join(out))
 
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1396,6 +1435,11 @@ async def _known_chats_lines(context, me) -> list:
         out.append(f"{c.get('title') or '?'}  [{c.get('type') or '?'}]")
         out.append(f"   {sc('id')}    : {cid}")
         out.append(f"   {sc('bot')}   : {st}")
+        try:
+            n = await context.bot.get_chat_member_count(cid)
+            out.append(f"   {sc('members')} : {n}")
+        except Exception:
+            pass
         out.append(f"   {sc('block')} : {bound.get(int(cid), '-') if cid else '-'}")
     if len(items) > 15:
         out.append(f"… +{len(items) - 15} more")
@@ -2914,7 +2958,6 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("pin", cmd_pin))
     app.add_handler(CommandHandler("promote", cmd_promote))
     app.add_handler(CommandHandler("ai", cmd_ai))
-    app.add_handler(CommandHandler("list_admins", cmd_admins))
     app.add_handler(CommandHandler(POST_COMMAND, cmd_post))
     app.add_handler(CommandHandler("posts", cmd_posts))
     app.add_handler(CommandHandler("btnstyle", cmd_btnstyle))

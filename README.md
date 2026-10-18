@@ -221,7 +221,7 @@ command, with `★` marking the owner-only ones.
 
 | Command | Description |
 |---|---|
-| `/admins` / `/list_admins` | Team list — admins see only admins; the owner also sees the owner entry |
+| `/admins` | Team list — admins see only admins; the owner also sees the owner entry |
 | `/post` | Build a channel post with a tracked deep link |
 | `/posts` | List built posts, their code and link |
 
@@ -229,7 +229,7 @@ command, with `★` marking the owner-only ones.
 
 | Command | Description |
 |---|---|
-| `/stats` | Usage and growth statistics |
+| `/stats` | Full overview: users who started the bot, reachable, banned, `/start` count, referrals — **plus each channel's live member count** (from `getChatMemberCount`) and the total across all channels, and every chat the bot is in grouped by type |
 | `/getid` | Look up a chat ID from a forwarded message |
 | `/setid` | Set a configured chat ID |
 | `/diag` | Gate diagnostics, plus every chat the bot is in |
@@ -409,7 +409,8 @@ The gate is **strict and fails closed**:
   *Download & Watch*, the post builder's type/channel/Done/Post now/Schedule buttons, the *Share*
   button on `/ref`, and the Approve buttons.
 - Every keyboard is built through `_btn()`, so a button without a colour cannot be introduced by
-  accident. `/btnstyle` prints the exact JSON the bot sends, so the payload can be checked directly.
+  accident. `/btnstyle` (owner only, kept out of the command list) prints the exact JSON the bot
+  sends, so the payload can be checked directly.
 - `style` needs **no** Telegram Premium and works in private chats, groups and supergroups alike —
   the only requirement is a client released after 9 Feb 2026.
 - The startup log prints the real button payload, so you can see exactly what is being sent.
@@ -486,6 +487,7 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Every AI reply says "busy" | `AI_API_KEY` is missing | The startup log warns about this explicitly — set the key |
 | A command seems to do nothing | It is above your role | Member, admin and owner each see only their own commands in the `/` menu, and anything higher stays **silent** — the bot never reveals that a higher tier exists. Run `/help` to see what your role has |
 | `/getid` always asks you to forward | You sent `/getid` with nothing attached | Forward the channel message **first**, or reply to a forwarded message with `/getid` |
+| A channel shows "no chat ID yet" in `/stats` | The bot has no numeric ID for it | Add the bot as an admin there, or bind it with `/setid`. Only then can its member count be read |
 | Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |
 
 ---
