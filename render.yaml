@@ -11,7 +11,7 @@
 # =====================================================================
 services:
   - type: web
-    name: linnet-bot
+    name: ongoing-bot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -40,4 +40,3 @@ services:
       #   value: gemini-3.5-flash-lite
       - key: JOIN_FAIL_MODE
         value: "closed"
-
