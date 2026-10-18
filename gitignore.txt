@@ -11,6 +11,7 @@
 # ---- Bot runtime data (Render par khud ban jaati hai) ----
 data/
 *.json.tmp
+*.json.corrupt-*
 
 # ---- Python ----
 __pycache__/

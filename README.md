@@ -265,8 +265,7 @@ Owner and admins only. Builds a channel post whose button is a tracked deep link
 4. The bot then asks for each field **for that type** — see `POST_FIELDS_BY_TYPE`. Anime and Series ask Name, Season, Episodes, Quality, Language, Link; a Movie asks Name, Year, Quality, Language, Link (no Season or Episodes). Reply to each, or send `skip` to leave one out. `Link` is the join destination (see below) — it is not printed in the post.
 5. Choose **Post now** or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
 
-The post goes out as a **photo** (your banner) with a styled caption and a **📥 Download & Watch**
-button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so when a reader taps it,
+The post goes out as a **photo** (your banner) with a styled caption and a **Download & Watch** button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so when a reader taps it,
 their chat with the bot opens and the bot already knows which post it is.
 
 The caption's detail lines are built from the type's own fields — drop `Name` and `Link` and the rest
@@ -299,8 +298,7 @@ The episode line, the `WATCH & DOWNLOAD` line and the button **all point to the 
 link**. Tapping any of them opens the bot chat and `/start` runs automatically, and the bot then
 hands over the link — exactly like the button.
 
-The `Link` field is **not printed as text**. It is the destination of the **🔔 Request to Join**
-button: the reader taps the post (or the button), the bot greets them, and that button opens the
+The `Link` field is **not printed as text**. It is the destination of the **Request to Join** button: the reader taps the post (or the button), the bot greets them, and that button opens the
 link you gave.
 
 The greeting is sent **immediately** — no AI wait — so the button appears the instant the deep link

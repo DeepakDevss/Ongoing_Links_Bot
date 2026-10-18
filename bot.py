@@ -1543,7 +1543,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.approve_chat_join_request(chat_id=int(cid), user_id=int(uid))
             await q.answer("Approved")
             try:
-                await q.edit_message_text((q.message.text or "") + "\n\n✅ APPROVED")
+                await q.edit_message_text((getattr(q.message, "text", "") or "") + "\n\n✅ APPROVED")
             except Exception:
                 pass
             try:
@@ -1572,7 +1572,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 can_invite_users=True, can_pin_messages=True, can_change_info=True)
             await q.answer("Approved")
             try:
-                await q.edit_message_text((q.message.text or "") + "\n\n✅ APPROVED")
+                await q.edit_message_text((getattr(q.message, "text", "") or "") + "\n\n✅ APPROVED")
             except Exception:
                 pass
         except Exception as e:
