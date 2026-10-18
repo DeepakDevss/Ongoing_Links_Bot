@@ -91,6 +91,7 @@ from config import (
     POST_EP_LINE,
     POST_TYPES,
     POST_FIELDS,
+    POST_FIELDS_BY_TYPE,
     POST_BUTTON_TEXT,
     JOIN_BUTTON_TEXT,
     GATE_MESSAGE,
@@ -584,15 +585,6 @@ def is_privileged(uid: int) -> bool:
     return is_owner(uid) or is_admin(uid)
 
 
-def role_of(uid) -> str:
-    """Owner / Admin 1 / Admin 2 / Member — dikhane ke liye."""
-    if is_owner(uid):
-        return "Owner"
-    if is_admin(uid):
-        return admin_label(uid)
-    return "Member"
-
-
 def _owner_note(uid) -> str:
     """Owner bol raha hai to AI ko bata do (gate ke baahar)."""
     if is_owner(uid):
@@ -1064,11 +1056,6 @@ _COMMANDS = [
     ("ban",         "bot-wide ban:  /ban <user_id>",               "owner"),
     ("unban",       "remove a ban:  /unban <user_id>",                "owner"),
 ]
-
-
-def _help_rows(want):
-    return [((POST_COMMAND if c == "POSTCMD" else c), d)
-            for c, d, r in _COMMANDS if r == want]
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2320,8 +2307,21 @@ def _esc(t) -> str:
             .replace('"', "&quot;").replace("'", "&#x27;"))
 
 
+def _post_fields(t) -> list:
+    """Us post TYPE ke fields (Anime/Movie/Series). Type na ho to default."""
+    return POST_FIELDS_BY_TYPE.get(str(t or "").strip()) or POST_FIELDS
+
+
+def _post_lines(t) -> list:
+    """Caption me kaunsi detail lines dikhengi — type ke fields se (Name/Link chhod ke)."""
+    return [f for f in _post_fields(t) if f not in ("Name", "Link")]
+
+
 async def _ep_line(p) -> str:
     """'S03 EPISODE 01-02 ADDED' jaisi ek line — AI banata hai, warna season se."""
+    if "Season" not in _post_fields(p.get("type")):
+        # Movie jaisa — "S03 EPISODE 01 ADDED" ka matlab nahi hota.
+        return f"NEW {str(p.get('type') or 'POST').upper()} ADDED"
     season = str(p.get("Season") or "").strip()
     if POST_EP_LINE:
         try:
@@ -2350,7 +2350,7 @@ def _post_caption(p, ep_line="", link_url="", text_links=True) -> str:
     sep = "━━━━━━━━━━━━━━━━━"
     out = [f"<blockquote>❝ {_esc(bd(str(p.get('Name') or '-')))} ❞</blockquote>", ""]
     det = []
-    for k in ("Season", "Episodes", "Quality", "Language"):
+    for k in _post_lines(p.get("type")):
         v = p.get(k)
         if v:
             det.append(f"►{k} :- {_esc(str(v)[:80])}")
@@ -2389,25 +2389,6 @@ def _post_caption(p, ep_line="", link_url="", text_links=True) -> str:
         tail = f" {POST_EP_EMOJI}" if POST_EP_EMOJI else ""
         out.append(f"   {em}{_esc(bd(ep_line))}{tail}")
         out.append(sep)
-    return "\n".join(out)
-
-
-def _post_text(p) -> str:
-    sc, bd = fonts.small_caps, fonts.bold
-    name = p.get("Name") or "-"
-    out = [f"{bd(str(p.get('type', 'Post')))}  —  {bd(name)}"]
-    # "Link" yahan jaan-boojh kar skip hai — wo post par dikhta nahi,
-    # sirf "Request to Join" button ka destination banta hai.
-    skip = {"Name", "Link", "code", "type", "channel_id", "channel_ids", "channel_url",
-            "image", "posted", "posted_at", "created", "post_at", "ep_line"}
-    for k, v in p.items():
-        if k in skip or not v:
-            continue
-        val = str(v)
-        if val.startswith(("http://", "https://", "t.me/", "www.")):
-            out.append(f"{sc(str(k))}: {val}")          # plain — clickable rahe
-        else:
-            out.append(f"{sc(str(k))}: {bd(val)}")
     return "\n".join(out)
 
 
@@ -2533,10 +2514,11 @@ async def _post_ask(chat_id, context, uid):
     fl = _post_flow.get(uid)
     if not fl:
         return
-    while fl["step"] < len(POST_FIELDS) and POST_FIELDS[fl["step"]] in fl["data"]:
+    fields = _post_fields(fl["type"])
+    while fl["step"] < len(fields) and fields[fl["step"]] in fl["data"]:
         fl["step"] += 1
-    if fl["step"] < len(POST_FIELDS):
-        f = POST_FIELDS[fl["step"]]
+    if fl["step"] < len(fields):
+        f = fields[fl["step"]]
         await context.bot.send_message(
             chat_id, f"Send {fonts.bold(f)}  ({fonts.small_caps('type')} skip {fonts.small_caps('to leave it out')})")
         return
@@ -2570,7 +2552,7 @@ async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fl.pop("await_image", None)
         if txt.lower() != "skip" and txt:
             # image nahi bheji par kuch likha -> usko pehla field maan lo
-            fl["data"].setdefault(POST_FIELDS[0], txt)
+            fl["data"].setdefault(_post_fields(fl["type"])[0], txt)
         await _post_ask(update.effective_chat.id, context, uid)
         return
 
@@ -2602,8 +2584,9 @@ async def _post_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- normal field ---
-    if fl["step"] < len(POST_FIELDS):
-        fl["data"][POST_FIELDS[fl["step"]]] = "" if txt.lower() == "skip" else txt
+    fields = _post_fields(fl["type"])
+    if fl["step"] < len(fields):
+        fl["data"][fields[fl["step"]]] = "" if txt.lower() == "skip" else txt
         fl["step"] += 1
         await _post_ask(update.effective_chat.id, context, uid)
         return

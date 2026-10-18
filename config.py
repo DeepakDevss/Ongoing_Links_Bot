@@ -173,8 +173,8 @@ JOIN_FAIL_MODE = os.getenv("JOIN_FAIL_MODE", "closed").lower()
 MEMBERSHIP_CACHE_TTL = _int_env("MEMBERSHIP_CACHE_TTL", 60)
 
 # Kitne required blocks join karna ZAROORI hai (force-join gate ke liye).
-#   "2"   -> kam se kam 2 (jo bhi 2)   <-- default
-#   "all" -> saare required blocks
+#   "all" -> saare required blocks   <-- default (chaaron channels)
+#   "2"   -> kam se kam 2 (jo bhi 2)
 #   "1"   -> sirf 1
 MIN_JOINS_REQUIRED = os.getenv("MIN_JOINS_REQUIRED", "all")
 
@@ -352,9 +352,19 @@ POST_COMMAND = os.getenv("POST_COMMAND", "post").lstrip("/")
 # Post ke type buttons (jo /post par dikhte hain)
 POST_TYPES = [x.strip() for x in os.getenv("POST_TYPES", "Anime,Movie,Series").split(",") if x.strip()]
 
-# AI kin cheezon ka sawaal poochhega (channel uske BAAD poochha jata hai)
+# AI kin cheezon ka sawaal poochhega (channel uske BAAD poochha jata hai).
+# Ye DEFAULT hai — us type ke liye jo niche POST_FIELDS_BY_TYPE me na ho.
 POST_FIELDS = [x.strip() for x in
                os.getenv("POST_FIELDS", "Name,Season,Episodes,Quality,Language,Link").split(",") if x.strip()]
+
+# Har post TYPE ke apne sawaal. Movie me Season/Episodes ka matlab nahi hota,
+# isliye uske liye Year poochha jaata hai. Caption ki lines khud in fields se
+# banti hain (Name aur Link chhod ke).
+POST_FIELDS_BY_TYPE = {
+    "Anime":  ["Name", "Season", "Episodes", "Quality", "Language", "Link"],
+    "Movie":  ["Name", "Year", "Quality", "Language", "Link"],
+    "Series": ["Name", "Season", "Episodes", "Quality", "Language", "Link"],
+}
 
 # Post me jo button lagta hai — ye bot ka deep link kholta hai
 POST_BUTTON_TEXT = os.getenv("POST_BUTTON_TEXT", "Download & Watch")

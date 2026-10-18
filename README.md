@@ -262,12 +262,16 @@ Owner and admins only. Builds a channel post whose button is a tracked deep link
 1. `/post` → pick a type (`POST_TYPES`: Anime / Movie / Series).
 2. **Pick the channels** — the buttons come from `POST_CHANNELS`. Tap to toggle (`✅`), tap as many as you want, then **➡️ Done**. The post goes to every channel you selected.
 3. **Send the banner image.** The bot reads it with AI vision and shows what it read — as a hint only, nothing is filled in for you.
-4. The bot then asks for each field in `POST_FIELDS` (Name, Season, Episodes, Quality, Language, Link) one by one. Reply to each, or send `skip` to leave one out. `Link` is the join destination (see below) — it is not printed in the post.
+4. The bot then asks for each field **for that type** — see `POST_FIELDS_BY_TYPE`. Anime and Series ask Name, Season, Episodes, Quality, Language, Link; a Movie asks Name, Year, Quality, Language, Link (no Season or Episodes). Reply to each, or send `skip` to leave one out. `Link` is the join destination (see below) — it is not printed in the post.
 5. Choose **Post now** or **Schedule** (time as `YYYY-MM-DD HH:MM`, or just `HH:MM` — IST).
 
 The post goes out as a **photo** (your banner) with a styled caption and a **📥 Download & Watch**
 button. The button is a deep link — `https://t.me/<bot>?start=p<code>` — so when a reader taps it,
 their chat with the bot opens and the bot already knows which post it is.
+
+The caption's detail lines are built from the type's own fields — drop `Name` and `Link` and the rest
+become the `►` lines, so a Movie shows `►Year` and an Anime shows `►Season`/`►Episodes`. The episode
+line is only generated for types that have a Season; a Movie gets `NEW MOVIE ADDED` instead.
 
 The caption looks like this (sent with `parse_mode=HTML` so the credit and the download line are
 real inline links):
@@ -322,8 +326,8 @@ working AI key — if it fails, the bot just skips pre-filling and asks you norm
 Render instance the service sleeps when idle, so a scheduled post may fire late — keep the service
 awake (a cron ping to `/health`) or post immediately.
 
-`POST_COMMAND` renames the command; `POST_CHANNELS` sets the channel buttons; `POST_FIELDS` sets the
-questions asked; `POST_BUTTON_TEXT` (default `Download & Watch`) and `JOIN_BUTTON_TEXT` (default
+`POST_COMMAND` renames the command; `POST_CHANNELS` sets the channel buttons; `POST_FIELDS` is the
+fallback question list and `POST_FIELDS_BY_TYPE` sets the questions per type; `POST_BUTTON_TEXT` (default `Download & Watch`) and `JOIN_BUTTON_TEXT` (default
 `Request to Join`) change the button labels; `POST_ASK_IMAGE` turns the banner step off.
 
 ### Button labels carry no emoji

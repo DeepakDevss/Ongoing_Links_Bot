@@ -2,10 +2,10 @@
 =====================================================================
   fonts.py  —  Unicode "fancy font" helpers
 =====================================================================
-  Telegram normal *bold* / _italic_ Markdown par kabhi kabhi error deta
-  hai (jaise naam mein "_" ya "*" ho to message hi fail ho jata hai).
-  Isliye hum Unicode styled characters use karte hain — ye har jagah,
-  bina ParseMode, theek dikhte hain.
+  Telegram ka normal *bold* / _italic_ Markdown kabhi kabhi fail karta hai
+  (naam me "_" ya "*" ho to message hi error de deta hai). Isliye hum Unicode
+  styled characters use karte hain — ye har jagah, bina ParseMode, theek
+  dikhte hain.
 
   Available:
     bold(text)        -> 𝗯𝗼𝗹𝗱  (sans-serif bold)
@@ -15,7 +15,7 @@
     script(text)      -> 𝓼𝓬𝓻𝓲𝓹𝓽
 
   Sirf ASCII letters/digits style hote hain. Baaki characters (Hindi,
-  emoji, punctuation, numbers ke symbols) jaisa hai waisa hi rehta hai.
+  emoji, punctuation and digits) passes through unchanged.
 =====================================================================
 """
 
