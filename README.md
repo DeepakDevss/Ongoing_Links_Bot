@@ -351,8 +351,15 @@ That flow is:
    bot sends the join prompt again (same buttons, same verify button).
 5. Once verified, the bot finally shows the post's **Request to Join** button, which opens the link.
 
-A user passes if they are a member **or** have sent a join request (`chat_join_request`), which the
-bot remembers itself — the Bot API has no way to list pending requests.
+A user passes if they are a member **or** have a join request on record (`chat_join_request`) — the
+Bot API has no way to list pending requests, so the bot remembers them itself. That record is kept
+honest in two ways:
+
+- **Leaving clears it.** The bot listens for `chat_member` updates. The moment someone leaves or is
+  kicked, their request record is dropped and the membership cache is invalidated — so joining and
+  then leaving no longer passes the gate.
+- **It expires after 24 hours.** A request older than `_REQUEST_TTL` stops counting, and only real
+  membership will do after that.
 
 `MIN_JOINS_REQUIRED` defaults to `all`, so every channel listed with `require_join: true` must be
 joined or requested.

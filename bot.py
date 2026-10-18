@@ -247,9 +247,13 @@ def db_add_user(user, bump_start=False):
 
 _requests_cache = None
 
+# Join request sirf itni der valid hai. Iske baad sirf ASLI membership ginegi.
+# (Warna ek baar request bhej dene wala hamesha ke liye "verified" milta rehta.)
+_REQUEST_TTL = 24 * 3600
+
 
 def _requests():
-    """{user_id: [chat_id, ...]} — jinhone join REQUEST bhej di hai."""
+    """{user_id: {chat_id: timestamp}} — jinhone join REQUEST bhej di hai."""
     global _requests_cache
     if _requests_cache is None:
         with _db_lock:
@@ -257,23 +261,59 @@ def _requests():
     return _requests_cache
 
 
+def _per_user(per):
+    """Purana format (list) ko naye {chat_id: ts} me badlo."""
+    if isinstance(per, list):
+        return {str(c): 0 for c in per}
+    return dict(per or {})
+
+
 def db_add_request(user_id, chat_id):
     global _requests_cache
     with _db_lock:
         d = _db_load()
         r = d.setdefault("requests", {})
-        lst = r.setdefault(str(user_id), [])
-        if int(chat_id) not in lst:
-            lst.append(int(chat_id))
+        per = _per_user(r.get(str(user_id)))
+        per[str(int(chat_id))] = time.time()
+        r[str(user_id)] = per
         for k in list(r.keys())[: max(0, len(r) - 5000)]:
             r.pop(k, None)                      # bound rakho
         _db_save(d)
         _requests_cache = dict(r)
 
 
+def db_del_request(user_id, chat_id):
+    """User ne join kar liya ya LEAVE kar diya -> request record hata do.
+    Isi ke bina: join karke leave karne par bhi gate 'verified' maanta rehta tha."""
+    global _requests_cache
+    with _db_lock:
+        d = _db_load()
+        r = d.setdefault("requests", {})
+        if str(user_id) not in r:
+            return
+        per = _per_user(r.get(str(user_id)))
+        per.pop(str(int(chat_id)), None)
+        if per:
+            r[str(user_id)] = per
+        else:
+            r.pop(str(user_id), None)
+        _db_save(d)
+        _requests_cache = dict(r)
+
+
 def has_request(user_id, chat_id) -> bool:
-    """User ne is chat me join request bhej di hai? (join na hua ho tab bhi)."""
-    return int(chat_id) in _requests().get(str(user_id), [])
+    """User ne is chat me join request bhej di thi? Sirf _REQUEST_TTL tak valid —
+    uske baad sirf asli membership ginegi."""
+    per = _requests().get(str(user_id))
+    if not per:
+        return False
+    if isinstance(per, list):                   # purana format
+        return int(chat_id) in per
+    ts = per.get(str(int(chat_id)))
+    try:
+        return bool(ts) and (time.time() - float(ts)) < _REQUEST_TTL
+    except (TypeError, ValueError):
+        return False
 
 
 def db_user_exists(uid) -> bool:
@@ -1722,6 +1762,28 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.warning("Owner DM fail: %s", e)
 
 
+async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kisi MEMBER ki membership badli (join / leave / kick).
+    Leave par uski join-request yaadash hata do — warna gate usko hamesha
+    'verified' maanta rehta tha (asli bug)."""
+    cm = getattr(update, "chat_member", None)
+    if not cm or not cm.chat:
+        return
+    chat = cm.chat
+    if chat.type == ChatType.PRIVATE:
+        return
+    usr = getattr(cm.new_chat_member, "user", None)
+    if not usr or getattr(usr, "is_bot", False):
+        return
+    status = getattr(cm.new_chat_member, "status", "")
+    _member_cache.pop((int(usr.id), str(chat.id)), None)   # purana cache saaf
+    db_del_request(usr.id, chat.id)
+    if status in NOT_MEMBER_STATUSES:
+        log.info("User %s LEFT %s — request record hataya", usr.id, chat.id)
+    else:
+        log.info("User %s joined %s — request record hataya (asli membership hai)", usr.id, chat.id)
+
+
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bot ko jab kisi channel/group me add ya admin banaya jaye -> Telegram
     turant us chat ki id + title bhejta hai. Yahi sabse aasan tareeka hai."""
@@ -2794,6 +2856,8 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    # Kisi bhi member ka join/leave — leave par request record hata do.
+    app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, on_chat_seen))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, on_group_message))
