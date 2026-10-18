@@ -889,6 +889,34 @@ async def send_join_gate(update: Update, context, edit=False):
         await update.effective_message.reply_text(text, reply_markup=kb)
 
 
+async def _set_commands(app: Application):
+    """Telegram ke '/' menu me commands dikhao — warna user ko lagta hai ki
+    commands hain hi nahi. Default = member ke commands; ADMIN_IDS ko uske
+    admin commands; OWNER ko sabhi."""
+    from telegram import (BotCommand, BotCommandScopeDefault, BotCommandScopeChat)
+    def _name(c):
+        return POST_COMMAND if c == "POSTCMD" else c
+    member = [BotCommand(_name(c), d) for c, d, r in _COMMANDS if r == "member"]
+    admin = [BotCommand(_name(c), d) for c, d, r in _COMMANDS if r in ("member", "admin")]
+    every = [BotCommand(_name(c), d) for c, d, r in _COMMANDS]
+    try:
+        await app.bot.set_my_commands(member, scope=BotCommandScopeDefault())
+        log.info("Commands menu set (%s default commands).", len(member))
+    except Exception as e:
+        log.warning("setMyCommands (default) fail: %s", e)
+    for uid in ADMIN_IDS:
+        try:
+            await app.bot.set_my_commands(admin, scope=BotCommandScopeChat(chat_id=uid))
+        except Exception:
+            pass
+    if OWNER_ID:
+        try:
+            await app.bot.set_my_commands(every, scope=BotCommandScopeChat(chat_id=OWNER_ID))
+            log.info("Owner command menu set (%s commands).", len(every))
+        except Exception:
+            pass
+
+
 async def verify_blocks_on_startup(app: Application):
     """Start par check: har enforced chat ki id hai? bot admin hai?
     Jo problem mile wo admin ko DM bhi bhejo — sirf log me chhodo mat."""
@@ -903,6 +931,9 @@ async def verify_blocks_on_startup(app: Application):
         log.info("button payload jo Telegram ko ja raha hai: %s", json.dumps(_sample))
     except Exception as e:
         log.warning("Button payload sample fail: %s", e)
+    if not OWNER_ID:
+        log.warning("No OWNER_ID and no ADMIN_IDS — nobody can run the owner "
+                    "commands (/diag, /setid, /broadcast). Set ADMIN_IDS on Render.")
     _ready, _no_id = gate_report()
     if _no_id:
         log.warning("GATE NOT ENFORCING — no chat id for: %s. "
@@ -910,6 +941,7 @@ async def verify_blocks_on_startup(app: Application):
                     "shows but cannot block anyone.", ", ".join(_no_id))
     else:
         log.info("Gate is READY — checking %s channel(s).", len(_ready))
+    await _set_commands(app)
     try:
         me = await app.bot.get_me()
     except Exception as e:
@@ -1066,7 +1098,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sc, bd = fonts.small_caps, fonts.bold
     lvl = 2 if is_owner(uid) else (1 if is_admin(uid) else 0)
     rank = {"member": 0, "admin": 1, "owner": 2}
-    out = [bd("COMMANDS"), ""]
+    out = [bd("COMMANDS"), "",
+           f"{sc('type any command below, or just write to me normally')}", ""]
     for c, d, r in _COMMANDS:
         if rank[r] > lvl:
             continue
@@ -1128,7 +1161,30 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = update.effective_message
     if not context.args and not msg.reply_to_message:
-        await msg.reply_text("Use: /broadcast <message>  (or reply to a message with /broadcast)")
+        # Bina message ke -> poora TOTAL dikhao (sirf is chat ka nahi).
+        users = db_all_users()
+        chats = db_get_chats()
+        s = db_stats()
+        by_type = {}
+        for c in chats.values():
+            t = str(c.get("type") or "?")
+            by_type[t] = by_type.get(t, 0) + 1
+        sc, bd = fonts.small_caps, fonts.bold
+        out = [bd("BROADCAST"), "",
+               f"{sc('total users')}      : {bd(str(s['total_users']))}",
+               f"{sc('reachable by DM')}  : {bd(str(max(0, s['total_users'] - s['banned'])))}",
+               f"{sc('banned (skipped)')} : {bd(str(s['banned']))}",
+               f"{sc('total started')}    : {bd(str(s['total_started']))}",
+               "",
+               f"{sc('chats the bot is in')} : {bd(str(len(chats)))}"]
+        for t, n in sorted(by_type.items()):
+            out.append(f"   {sc(t)} : {bd(str(n))}")
+        out += ["",
+                f"{sc('note')}: the bot can only DM people who have started it. "
+                "It cannot list the members of a group or channel.",
+                "",
+                "Use: /broadcast <message>  (or reply to a message with /broadcast)"]
+        await _send_long(msg, "\n".join(out))
         return
     if context.args:
         text = " ".join(context.args)
@@ -1184,27 +1240,45 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("Invalid user id.")
 
 
+def _forwarded_chat(msg):
+    """Forwarded message se ORIGINAL chat nikalo.
+    Bot API 7.0 (aur PTB 22.8) me `forward_from_chat` hata diya gaya hai —
+    ab `forward_origin` aata hai. Dono handle karte hain, warna /getid
+    hamesha 'Forward a message...' hi kehta rehta tha."""
+    o = getattr(msg, "forward_origin", None)
+    if o is not None:
+        ch = getattr(o, "chat", None) or getattr(o, "sender_chat", None)
+        return ch                      # user/hidden forward -> None
+    return getattr(msg, "forward_from_chat", None)   # purani API
+
+
+async def _report_forwarded_chat(msg, fch):
+    """Forwarded chat ka id batao aur (match kare to) block me save kar do."""
+    b = match_block_by_title(fch.title) if getattr(fch, "title", None) else None
+    saved = ""
+    if b:
+        db_set_chat_id(b["name"], fch.id)
+        saved = (f"\n\nSaved: \"{b['name']}\" -> {fch.id}\n"
+                 "Force-join verification will use this now.")
+    await msg.reply_text(
+        f"Chat: {getattr(fch, 'title', '-')}\n"
+        f"Numeric id: {fch.id}\n"
+        f"Type: {getattr(fch, 'type', '-')}{saved}"
+    )
+
+
 async def cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: channel/group ka message bot ko FORWARD karo -> numeric id milega
     (aur seedha save bhi ho jayega — config edit karne ki zaroorat nahi)."""
     if not await _need_owner(update):
         return
     msg = update.effective_message
-    fwd = getattr(msg, "forward_from_chat", None)
-    if fwd:
-        b = match_block_by_title(fwd.title)
-        saved = ""
-        if b:
-            db_set_chat_id(b["name"], fwd.id)
-            saved = (
-                f"\n\nSaved: \"{b['name']}\" -> {fwd.id}\n"
-                "Force-join verification will use this now."
-            )
-        await msg.reply_text(
-            f"Chat: {fwd.title}\n"
-            f"Numeric id: {fwd.id}\n"
-            f"Type: {fwd.type}{saved}"
-        )
+    # (a) khud ye message forward ho, (b) ya iske reply me forward ho — dono chalao.
+    fch = _forwarded_chat(msg)
+    if fch is None and msg.reply_to_message is not None:
+        fch = _forwarded_chat(msg.reply_to_message)
+    if fch is not None:
+        await _report_forwarded_chat(msg, fch)
     else:
         await msg.reply_text(
             "Forward any message from that channel/group here — I will give you the "
@@ -1864,6 +1938,12 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if user.id in _post_flow:
         await _post_step(update, context)
         return
+    # Kisi channel/group ka message forward kiya? (chat id nikalne ke liye)
+    # Owner/admin ke liye seedha id batao — warna AI us par baat karne lagta tha.
+    fch = _forwarded_chat(update.effective_message)
+    if fch is not None and is_privileged(user.id):
+        await _report_forwarded_chat(update.effective_message, fch)
+        return
     if not _ai_allowed(user.id):
         await update.effective_message.reply_text(
             f"{fonts.small_caps('Slow down')} — {fonts.small_caps('too many messages, try again in a little while')}."
@@ -1986,12 +2066,11 @@ def _target_uid(update, context):
 
 
 async def _need_owner(update):
-    """Sirf owner — warna saaf message."""
-    if is_owner(update.effective_user.id):
-        return True
-    if is_privileged(update.effective_user.id):
-        await update.effective_message.reply_text("Only the owner can do this.")
-    return False
+    """Sirf owner. Baaki sab ke liye CHUP — koi message nahi.
+    Wajah: agar admin ko "Only the owner can do this." dikhe to usko pata chal
+    jata hai ki upar koi tier hai — aur admin ko ye pata nahi chalna chahiye.
+    Commands menu bhi role ke hisaab se hi set hota hai (_set_commands)."""
+    return is_owner(update.effective_user.id)
 
 
 async def _need(update, group_only=True):
@@ -2501,6 +2580,10 @@ async def _post_channel_kb(chat_id, context, uid, edit_msg=None):
 async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Post builder — sirf Owner/Admin."""
     if not is_privileged(update.effective_user.id):
+        return
+    if not POST_CHANNELS:
+        await update.effective_message.reply_text(
+            "No channels configured. Set POST_CHANNELS in config.py first.")
         return
     _post_flow.pop(update.effective_user.id, None)
     kb = InlineKeyboardMarkup(

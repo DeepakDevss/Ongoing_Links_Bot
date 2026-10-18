@@ -235,7 +235,7 @@ command, with `★` marking the owner-only ones.
 | `/diag` | Gate diagnostics, plus every chat the bot is in |
 | `/chats` | Every chat the bot is in — ID, type, bot status, bound block |
 | `/perms` | The bot's permissions in this chat, what each one means, and its command |
-| `/broadcast` | Send a message to all known users |
+| `/broadcast` | Send a message to all known users. With no message it prints a summary first: total users, reachable by DM, banned, and every chat the bot is in (grouped by type) |
 | `/ban` / `/unban` | Bot-wide ban / unban by user ID |
 
 An admin who sends an owner-only command gets *"Only the owner can do this."*
@@ -419,6 +419,13 @@ The gate is **strict and fails closed**:
 - `JOIN_FAIL_MODE` defines what happens when the membership check can't be completed — for example, when the bot lacks permission to query membership or the Telegram API is unreachable. Two common modes are to fail open (allow access) or fail closed (deny access).
 - `/diag` reports the current state of the gate so misconfiguration can be spotted quickly.
 - `/getid` and `/setid` are used to discover and correct chat IDs used by the gate.
+  **Forward a message from the channel/group** and the bot replies with the numeric id — and binds it
+  automatically when the title matches a block. Owner and admins can also just forward the message
+  with no command at all. This reads the new `forward_origin` field; `forward_from_chat` was removed
+  in Bot API 7.0, which is why the old version silently never worked.
+- The command list is registered with `setMyCommands` at startup, so the commands appear in
+  Telegram's `/` menu — the member list by default, the admin list for each `ADMIN_IDS`, and every
+  command for the owner. Without this the commands exist but stay invisible.
 
 ### The AI's instructions
 
@@ -460,7 +467,7 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 ## Notes and Limits
 
 - **No auto-add.** The bot does not add users to any chat. Users join through the links configured in `LINK_BLOCKS`.
-- **Broadcast is opt-in for recipients.** Only users known to the bot receive broadcasts. Unknown users are never messaged.
+- **Broadcast is opt-in for recipients.** Only users known to the bot receive broadcasts — the Bot API cannot list the members of a group or channel, so someone who has never started the bot cannot be reached.
 - **Data is local.** All state lives in `data/db.json`. The file is created on first run and is not part of the repository.
 - **Persistent storage is required in production.** On ephemeral filesystems, attach a persistent disk and point the database path at it.
 - **The webhook URL must be public.** The bot will not function correctly behind a URL that Telegram cannot reach.
@@ -479,6 +486,8 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Buttons have no colour | An old Telegram client, or you are looking at an **old message** | Button colour is a **client** feature — Telegram silently ignores `style` on clients older than 9 Feb 2026, and old messages keep the keyboard they were sent with. Two checks: (1) run `/btnstyle` — it sends three action buttons *and* two link buttons, all coloured, and prints the exact JSON being sent; (2) open **https://web.telegram.org** and run `/btnstyle` there — Telegram Web is always the newest build, so coloured buttons there prove the phone app is the old one. Also send `/start` fresh rather than scrolling back |
 | Bot still behaves like an older version | `AI_SYSTEM_PROMPT` set in the environment overrides the built-in prompt | Delete `AI_SYSTEM_PROMPT` from the Render environment |
 | Every AI reply says "busy" | `AI_API_KEY` is missing | The startup log warns about this explicitly — set the key |
+| A command seems to do nothing | It is above your role | Member, admin and owner each see only their own commands in the `/` menu, and anything higher stays **silent** — the bot never reveals that a higher tier exists. Run `/help` to see what your role has |
+| `/getid` always asks you to forward | You sent `/getid` with nothing attached | Forward the channel message **first**, or reply to a forwarded message with `/getid` |
 | Broadcast does not reach users | No known users yet, or the bot was blocked by recipients | Confirm recipient count with `/stats` |
 
 ---
