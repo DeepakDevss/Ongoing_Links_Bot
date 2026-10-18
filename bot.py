@@ -744,6 +744,21 @@ _passed: set = set()
 _chat_status: dict = {}
 
 
+def gate_report():
+    """Gate ki ASLI haalat: kaunse require_join blocks verify ho sakte hain,
+    aur kaunse nahi (unki chat id hi nahi hai).
+    Bina id ke bot us chat ki membership check hi nahi kar sakta — isliye gate
+    wahan sirf dikhawe ka hota hai. Ye function us baat ko saaf karta hai."""
+    learned = _learned_ids()
+    ready, no_id = [], []
+    for blk in LINK_BLOCKS:
+        if not blk.get("require_join"):
+            continue
+        cid = blk.get("id") or learned.get(blk["name"])
+        (ready if cid else no_id).append(blk["name"])
+    return ready, no_id
+
+
 async def needs_join(context, user_id, force=False) -> bool:
     """User ko gate dikhana hai? Owner/admin ko nahi."""
     if is_privileged(user_id):
@@ -847,6 +862,13 @@ async def verify_blocks_on_startup(app: Application):
         log.info("button payload jo Telegram ko ja raha hai: %s", json.dumps(_sample))
     except Exception as e:
         log.warning("Button payload sample fail: %s", e)
+    _ready, _no_id = gate_report()
+    if _no_id:
+        log.warning("GATE NOT ENFORCING — no chat id for: %s. "
+                    "Add the bot as ADMIN there (or /setid). Until then the gate "
+                    "shows but cannot block anyone.", ", ".join(_no_id))
+    else:
+        log.info("Gate is READY — checking %s channel(s).", len(_ready))
     try:
         me = await app.bot.get_me()
     except Exception as e:
@@ -1258,6 +1280,19 @@ async def _known_chats_lines(context, me) -> list:
     if len(items) > 15:
         out.append(f"… +{len(items) - 15} more")
     out.append("")
+    _ready, _no_id = gate_report()
+    if _no_id:
+        out.append(_SEP)
+        out.append(f"{bd('SET THE GATE IDS')}")
+        out.append(_SEP)
+        out.append(f"{sc('these blocks have no chat id yet, so the gate cannot check them')}:")
+        for n in _no_id:
+            out.append(f"  - {n}")
+        out.append("")
+        out.append(f"{sc('copy a chat id from above, then paste')}:")
+        for n in _no_id:
+            out.append(f"  /setid {n} <chat_id>")
+        out.append("")
     return out
 
 
@@ -1283,7 +1318,17 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     req_blocks = [x for x in LINK_BLOCKS if x.get("require_join")]
     joined_count = 0
     verifiable = 0
-    out = [bd("BOT STATUS"), ""]
+    _ready, _no_id = gate_report()
+    gate_ok = bool(_ready) and not _no_id
+    out = [bd("BOT STATUS"), "", sep,
+           f"{sc('gate')}   : {bd('READY') if gate_ok else bd('NOT READY')}",
+           f"{sc('checks')} : {len(_ready)}/{len(_ready) + len(_no_id)} {sc('channels')}",
+           sep, ""]
+    if not gate_ok:
+        out.append(f"{sc('the gate cannot block anyone yet')}.")
+        out.append(f"{sc('add the bot as an ADMIN in')}: {', '.join(_no_id) if _no_id else '-'}")
+        out.append(f"{sc('or bind by hand')} — /chats {sc('shows the ready-made /setid line')}.")
+        out.append("")
     for blk in LINK_BLOCKS:
         emoji = blk.get("emoji", "")
         out.append(sep)
@@ -1342,16 +1387,21 @@ _warned: set = set()
 
 
 async def _warn_admin_unverifiable(context, blocks):
-    """Bot in chats ko verify nahi kar paya -> admin ko ek baar batao."""
+    """Bot in chats ko verify nahi kar paya -> owner ko ek baar saaf-saaf batao."""
     names = sorted(b["name"] for b in blocks)
     key = tuple(names)
     if key in _warned:
         return
     _warned.add(key)
     text = (
-        "⚠️ Gate could not be verified — the bot is not an ADMIN in these chats (or the id is wrong):\n\n"
+        "⚠️ GATE IS NOT ENFORCING — I cannot check membership in these chats:\n\n"
         + "\n".join(f"- {n}" for n in names)
-        + "\n\nMake the bot an admin there — only then will force-join apply."
+        + "\n\nThe gate is showing, but it cannot block anyone yet.\n\n"
+        "Two things fix it:\n"
+        "1. Add the bot as an ADMIN in each of those channels (it learns the id "
+        "the moment it is added).\n"
+        "2. Or bind the id by hand — run /chats to see the ready-made /setid line.\n\n"
+        "Send /diag any time to see whether the gate is ready."
     )
     await _notify_owner(context.bot, text)
 
@@ -1530,6 +1580,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]),
         )
         return
+
+    # need == 0 -> bot kisi bhi required channel ki membership check hi nahi kar
+    # paya (chat id nahi hai / bot admin nahi). Fake "verified" na dikhao —
+    # sach batao, owner ko turant alert karo, aur user ko aage badhne do
+    # (warna wo hamesha atka rahega).
+    ready, no_id = gate_report()
+    if need == 0 and not ready and no_id:
+        await q.answer()
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=("The channel check is not set up yet, so I cannot confirm your "
+                  "membership right now. Please do join the channels below — I am "
+                  "letting you through this time."),
+            reply_markup=link_keyboard(extra_rows=[
+                [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
+            ]),
+        )
+        await _warn_admin_unverifiable(
+            context, [blk for blk in LINK_BLOCKS if blk["name"] in no_id])
 
     # Pass. (Ek hi baar answer karo — dobara answer karne par Telegram error deta hai.)
     await q.answer()

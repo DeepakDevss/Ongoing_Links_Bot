@@ -355,6 +355,33 @@ bot remembers itself — the Bot API has no way to list pending requests.
 `MIN_JOINS_REQUIRED` defaults to `all`, so every channel listed with `require_join: true` must be
 joined or requested.
 
+### Making the gate actually enforce
+
+The gate can only check a channel it has **both** of these for:
+
+1. the channel's **numeric chat id**, and
+2. the bot as an **admin** in that channel.
+
+The Bot API cannot resolve a private invite link (`t.me/+hash`) to a chat id — `checkChatInvite` is a
+client-API method, not a bot one. So a `require_join` block with `id: None` and no learned id **cannot
+be checked at all**, and the gate becomes decorative.
+
+The bot tells you this rather than pretending:
+
+- **Startup log** — `GATE NOT ENFORCING — no chat id for: …`
+- **`/diag`** — prints `gate : READY` or `NOT READY` at the very top, with the count of channels it
+  can check.
+- **`/chats`** — prints a ready-to-paste `/setid <block> <chat_id>` line for every block that has no
+  id yet.
+- **Owner DM** — when a user hits a gate that cannot check anything, the owner is told once, with the
+  fix.
+- **The user** is told plainly that the check is not set up yet and is let through, so a
+  half-configured gate never locks real readers out of a post.
+
+The easiest fix is to **add the bot as an admin in each channel** — it learns the id the moment it is
+added. If the channel title does not match a block name, bind it by hand with `/setid` (get the id
+from `/getid` by forwarding a message, or copy it from `/chats`).
+
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
 - Colours are sent through `api_kwargs` (`_btn()` in `bot.py`), not PTB's `style=` parameter — that parameter only exists from PTB 22.7, and on older versions the colour used to disappear silently. The `api_kwargs` route works on any PTB version.
