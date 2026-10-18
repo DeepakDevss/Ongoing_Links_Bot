@@ -949,7 +949,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code = context.args[0][1:]
         p = db_post_get(code)
         if p:
-            if await needs_join(context, user.id):
+            if await needs_join(context, user.id, force=True):
                 _pending_post[user.id] = code
                 _prune(_pending_post, 5000)
                 await send_join_gate(update, context)
@@ -979,10 +979,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 pass
 
-    # DM me bot se baat karne ke liye koi join/request zaroori NAHI.
+    # DM me bot se baat karne ke liye koi join/request zaroori NAHI — bas
+    # channels ke 5 links yahan bhi dikhte hain (join karna chahe to kar le).
     await update.effective_message.reply_text(
         f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
-        f"I am {fonts.bold(BOT_BRAND)}. Just type your question."
+        f"I am {fonts.bold(BOT_BRAND)}. Just type your question.\n\n"
+        f"{fonts.small_caps('our channels')}:",
+        reply_markup=link_keyboard(),
     )
 
 
@@ -1068,8 +1071,9 @@ async def cmd_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{fonts.small_caps('Your invites')}: {fonts.bold(str(count))}{rank_line}\n\n"
         "Share this link — when people join, your count goes up."
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-        "Share", url=f"https://t.me/share/url?url={link}&text=Try this bot!")]])
+    kb = InlineKeyboardMarkup([[_btn(
+        "Share", url=f"https://t.me/share/url?url={link}&text=Try this bot!",
+        style="primary")]])
     await update.effective_message.reply_text(text, reply_markup=kb)
 
 
@@ -1578,12 +1582,21 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ho, ya cache purana ho, to bhi pakda jaye.
     joined, missing, unknown, need = await join_status(context, user.id, force=True)
 
-    if need > 0 and len(joined) < need:
-        # Bina join kiye Check dabaya -> naya message: caption + links + Check.
+    # STRICT GATE: "Request to Join" SIRF tab milega jab join/request confirm ho
+    # jaye. Do soorat me block:
+    #   1) kuch channels join/request nahi hue
+    #   2) bot check hi nahi kar paya (chat id nahi / bot admin nahi) -> FAIL CLOSED
+    ready, no_id = gate_report()
+    blocked = (need > 0 and len(joined) < need) or (need == 0 and bool(no_id))
+    if blocked:
         await q.answer()
-        text = JOIN_PROMPT
-        if missing:
-            text += "\n\n" + ", ".join(b["name"] for b in missing)
+        if need == 0 and no_id:
+            text = ("I could not confirm your membership yet. Please join the "
+                    "channels below, then tap the button again.")
+        else:
+            text = JOIN_PROMPT
+            if missing:
+                text += "\n\n" + ", ".join(b["name"] for b in missing)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=text,
@@ -1591,31 +1604,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
             ]),
         )
+        if need == 0 and no_id:
+            await _warn_admin_unverifiable(
+                context, [blk for blk in LINK_BLOCKS if blk["name"] in no_id])
         return
-
-    # need == 0 -> bot kisi bhi required channel ki membership check hi nahi kar
-    # paya (chat id nahi hai / bot admin nahi). Fake "verified" na dikhao —
-    # sach batao, owner ko turant alert karo, aur user ko aage badhne do
-    # (warna wo hamesha atka rahega).
-    ready, no_id = gate_report()
-    if need == 0 and not ready and no_id:
-        await q.answer()
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=("The channel check is not set up yet, so I cannot confirm your "
-                  "membership right now. Please do join the channels below — I am "
-                  "letting you through this time."),
-            reply_markup=link_keyboard(extra_rows=[
-                [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
-            ]),
-        )
-        await _warn_admin_unverifiable(
-            context, [blk for blk in LINK_BLOCKS if blk["name"] in no_id])
 
     # Pass. (Ek hi baar answer karo — dobara answer karne par Telegram error deta hai.)
     await q.answer()
     _passed.add(user.id)
     _prune(_passed, 10000)
+    log.info("Gate PASSED for %s (%s/%s joined)", user.id, len(joined), need)
     if unknown and not joined and not missing:
         await _warn_admin_unverifiable(context, unknown)
 
@@ -2065,7 +2063,7 @@ async def cmd_promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         approver = ADMIN_IDS[0] if ADMIN_IDS else 0
         if approver and approver != update.effective_user.id:
             sc, bd = fonts.small_caps, fonts.bold
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            kb = InlineKeyboardMarkup([[_btn(
                 "Approve", callback_data=f"promo_ok:{chat.id}:{uid}",
                 style="success")]])
             try:

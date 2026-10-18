@@ -337,8 +337,9 @@ delete that variable to pick up the new default.
 
 ## Force-Join Gate
 
-**The gate is not used for chatting.** Plain DMs, `/start` and `/ai` all work with zero joins. The
-gate runs in exactly one place: when someone arrives through a **`/post` deep link**.
+**The gate is not used for chatting.** Plain DMs, `/start` and `/ai` all work with zero joins — and
+plain `/start` still shows the five channel buttons, so people can join if they want to. The gate runs
+in exactly one place: when someone arrives through a **`/post` deep link**.
 
 That flow is:
 
@@ -382,13 +383,21 @@ The easiest fix is to **add the bot as an admin in each channel** — it learns 
 added. If the channel title does not match a block name, bind it by hand with `/setid` (get the id
 from `/getid` by forwarding a message, or copy it from `/chats`).
 
-While the gate cannot verify anything it **keeps showing** — the *Joined / Verify* button stays on
-screen every time a post link is opened, rather than vanishing after the first tap. The user is still
-let through, so a half-configured gate never locks a reader out of a post.
+The gate is **strict and fails closed**:
+
+- *Request to Join* is handed over **only** when membership has actually been confirmed — joined **or**
+  a join request on record.
+- If the bot cannot check at all (no chat id, or it is not an admin), it does **not** let anyone
+  through. It says it could not confirm membership, keeps the gate and its *Joined / Verify* button on
+  screen, and tells the owner. Nothing is handed out on an unverifiable check.
+- The deep-link check ignores the membership cache, so a stale result can never let someone in.
 
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
 - Colours are sent through `api_kwargs` (`_btn()` in `bot.py`), not PTB's `style=` parameter — that parameter only exists from PTB 22.7, and on older versions the colour used to disappear silently. The `api_kwargs` route works on any PTB version.
+- **Every** button in the bot is coloured: the channel buttons, *Joined / Verify*, *Request to Join*,
+  *Download & Watch*, the post builder's type/channel/Done/Post now/Schedule buttons, the *Share*
+  button on `/ref`, and the Approve buttons.
 - The startup log prints the real button payload, so you can see exactly what is being sent.
 - `MIN_JOINS_REQUIRED` sets how many of the listed chats must be joined or requested (`all` by default).
 - `JOIN_FAIL_MODE` defines what happens when the membership check can't be completed — for example, when the bot lacks permission to query membership or the Telegram API is unreachable. Two common modes are to fail open (allow access) or fail closed (deny access).
