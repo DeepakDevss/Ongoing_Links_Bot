@@ -107,6 +107,12 @@ MONGO_URI_SAFE = _safe_mongo_uri()
 # Placeholder wala URI galti se paste ho gaya? Usse "set" mat maano.
 MONGO_ENABLED = bool(MONGO_URI_SAFE) and "<db_password>" not in MONGO_URI_SAFE and "<password>" not in MONGO_URI_SAFE
 
+# Placeholder host pehchano. Maine template diya tha `cluster0.xxxxx.mongodb.net`
+# aur wo literally paste ho gaya -> DNS "query name does not exist" deta rehta
+# hai aur asli wajah dikhti hi nahi. Ab bot saaf-saaf bata deta hai.
+_MONGO_HOST = MONGO_URI_SAFE.rsplit("@", 1)[-1].split("/", 1)[0] if "@" in MONGO_URI_SAFE else ""
+MONGO_PLACEHOLDER = ("xxx" in _MONGO_HOST.lower()) or ("<" in MONGO_URI_SAFE) or (">" in MONGO_URI_SAFE)
+
 # #2b  Model IDs. Bot pehle AI_MODEL try karta hai, fail hone par AI_MODEL_LITE.
 #      Oct 2026 ki sthiti (ai.google.dev/gemini-api/docs/models se):
 #        gemini-3.8-flash       <- latest Flash (Sept 2026)      = main

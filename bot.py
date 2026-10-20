@@ -119,6 +119,7 @@ from config import (
     MONGO_ENABLED,
     MONGO_PASSWORD,
     MONGO_PASSWORD_STRIPPED,
+    MONGO_PLACEHOLDER,
     AI_SYSTEM_PROMPT,
     AI_MAX_CHARS,
     AI_THINKING_LEVEL,
@@ -270,6 +271,12 @@ def _mongo_error_hint(e) -> str:
     if "server selection" in s or "timed out" in s or "timeout" in s:
         return ("Atlas tak pahunch hi nahi paya. Atlas > Network Access me "
                 "0.0.0.0/0 add hai? (Render ka IP badalta rehta hai.)")
+    if "does not exist" in s or "dns" in s or "nodename" in s:
+        return ("Host ka naam nahi mila. Zyadatar wajah: URI me PLACEHOLDER host "
+                "(jaise cluster0.xxxxx...) pada hai, ya host haath se type karte "
+                "waqt 1/l ya 0/o galat ho gaya.\n"
+                "  • Atlas > Connect > Drivers > Python > string ka COPY icon "
+                "dabao. Haath se type bilkul mat karo.")
     if "must be escaped" in s or "rfc 3986" in s or "quote_plus" in s:
         return ("URI me koi character escape nahi tha (jaise @ ya space).\n"
                 "  • Ye bot ab khud theek kar deta hai — par tabhi jab code naya ho.\n"
@@ -1917,6 +1924,11 @@ async def cmd_mongo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     out.append(f"{sc('kabhi purana password copy kar deta hai. Show dabakar')}")
     out.append(f"{sc('haath se select karke copy kar.')}")
     out.append("")
+    if MONGO_PLACEHOLDER:
+        out.append(f"{bd('HOST ME PLACEHOLDER PADA HAI')}")
+        out.append(f"{sc('asli host Atlas se COPY karo — haath se type MAT karo')}")
+        out.append(f"{sc('(1 aur l, 0 aur o dekhne me ek jaise lagte hain)')}")
+        out.append("")
     if not MONGO_ENABLED:
         out.append(f"{sc('MONGO_URI khali hai ya usme placeholder pada hai.')}")
         await _send_long(update.effective_message, "\n".join(out))
