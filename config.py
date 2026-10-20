@@ -49,33 +49,65 @@ AI_API_KEY = (
 #   mongodb+srv://<user>:<password>@<cluster>.mongodb.net/
 # Usme apna password daalo aur poora string MONGO_URI me paste karo.
 # Khali chhodo to bot pehle jaisa local file par chalega.
-MONGO_URI = os.getenv("MONGO_URI", "").strip()
-MONGO_DB = os.getenv("MONGO_DB", "ongoing_bot").strip() or "ongoing_bot"
-# Password ko ALAG rakhna behtar hai. Wajah: connection string me password
-# ko percent-encode karna padta hai — @ # $ ! % & jaise characters URI ko
-# tod dete hain, aur tab Atlas "bad auth : Authentication failed" deta hai
-# (code 8000). Ye galti bahut common hai. MONGO_PASSWORD set karo to bot
-# KHUD sahi encode karta hai — tujhe kuch sochna nahi padta.
+# ---- Do tareeke. MONGO_HOST wala BEHTAR hai (neeche wajah) -------------
+#   (A)  MONGO_HOST + MONGO_USER + MONGO_PASSWORD     <- 3 chhote fields
+#   (B)  MONGO_URI                                    <- ek lamba string
+#
+#   (A) kyun behtar: ek lamba connection string 3 jagah (Atlas -> notes ->
+#   Render) haath se le jaate waqt 4 tarah se toot sakta hai — host me typo
+#   (1/l, 0/o), placeholder reh jana, password me @ ya space, aur galat copy.
+#   Hum ye chaaron dekh chuke hain. Teen chhote fields me ye sab mumkin hi
+#   nahi — aur bot har field ko alag se check karke bata sakta hai ki kaun
+#   galat hai. Bot khud URI banata hai aur encoding bhi khud karta hai.
+MONGO_HOST = os.getenv("MONGO_HOST", "").strip()
 MONGO_USER = os.getenv("MONGO_USER", "").strip()
-# BUG FIX: password ko strip karna ZAROORI hai. Render ke box me paste karte
-# waqt trailing space / newline chipak jaata hai (aur Atlas ka "Copy" button
-# bhi kabhi-kabhi extra character le aata hai). Us ek extra character se
-# password galat ho jata hai aur Atlas bas "bad auth" kehta hai — asli wajah
-# pata nahi chalti. Kitna strip hua, wo yaad rakhte hain taaki /mongo bata sake.
+# Password ko strip karna ZAROORI hai — copy-paste me chipka space/newline
+# hi "bad auth" ki sabse aam wajah hai. Kitna hata, wo /mongo dikhata hai.
 _MONGO_PW_RAW = os.getenv("MONGO_PASSWORD", "")
 MONGO_PASSWORD = _MONGO_PW_RAW.strip()
 MONGO_PASSWORD_STRIPPED = len(_MONGO_PW_RAW) - len(MONGO_PASSWORD)
 
+# (B) Purana tareeka — poora connection string.
+MONGO_URI = os.getenv("MONGO_URI", "").strip()
+MONGO_DB = os.getenv("MONGO_DB", "ongoing_bot").strip() or "ongoing_bot"
+
+
+def _clean_host(h: str) -> str:
+    """Host field ko saaf karo — log galti se poora URI yahan paste kar dete hain."""
+    h = (h or "").strip()
+    for pre in ("mongodb+srv://", "mongodb://"):
+        if h.lower().startswith(pre):
+            h = h[len(pre):]
+    h = h.split("?", 1)[0].split("/", 1)[0]     # path / query hatao
+    if "@" in h:
+        h = h.rsplit("@", 1)[-1]                # user:pass@ hatao
+    return h.strip()
+
+
+def _host_looks_wrong(h: str) -> str:
+    """Host ki saaf-saaf galti batao (khali string = theek hai)."""
+    if not h:
+        return "MONGO_HOST khali hai"
+    if "xxx" in h.lower():
+        return "host me placeholder (xxx) pada hai — asli host daalo"
+    if not h.endswith(".mongodb.net"):
+        return "host '.mongodb.net' par khatam hona chahiye"
+    if h.count(".") < 2:
+        return "host adhoora lagta hai (jaise cluster0.abc123.mongodb.net)"
+    return ""
+
 
 def _safe_mongo_uri() -> str:
-    """URI ko ALWAYS saaf karo — username aur password dono ko percent-encode
-    karo, chahe wo URI ke andar ho ya MONGO_PASSWORD me.
-
-    Kyun zaroori hai: pymongo khud mana kar deta hai agar userinfo me koi
-    character escape na ho — error aata hai
-    "Username and password must be escaped according to RFC 3986".
-    Ye '@' ya space jaise characters par hota hai. User se ye expect karna
-    galat hai ki wo khud encode kare — ye code ka kaam hai."""
+    """Jo bhi mila usse ek SAHI (percent-encoded) URI banao.
+    Username/password khud encode karte hain — pymongo khud mana kar deta hai
+    agar userinfo me koi character escape na ho:
+      "Username and password must be escaped according to RFC 3986"
+    User se ye expect karna galat hai ki wo khud encode kare — ye code ka kaam hai."""
+    host = _clean_host(MONGO_HOST)
+    if host:
+        u = quote(MONGO_USER, safe="")
+        p = quote(MONGO_PASSWORD, safe="")
+        return f"mongodb+srv://{u}:{p}@{host}/?authSource=admin"
     uri = MONGO_URI
     if not uri:
         return uri
@@ -91,16 +123,11 @@ def _safe_mongo_uri() -> str:
         raw_user, raw_pw = userinfo.split(":", 1)
     else:
         raw_user, raw_pw = userinfo, ""
-    user = (MONGO_USER or unquote(raw_user)).strip()
-    # MONGO_PASSWORD jeetta hai; warna URI ke andar wala. Dono ko strip karo —
-    # copy-paste me chipka space/newline hi is error ki sabse aam wajah hai.
-    pw = (MONGO_PASSWORD or unquote(raw_pw)).strip()
+    u = quote((MONGO_USER or unquote(raw_user)).strip(), safe="")
+    p = quote((MONGO_PASSWORD or unquote(raw_pw)).strip(), safe="")
     if "authSource=" not in rest:
         rest += ("&" if "?" in rest else "?") + "authSource=admin"
-    # quote() use karte hain, quote_plus() nahi: userinfo me space %20 hota
-    # hai, + nahi. quote_plus se space "+" ban jata hai aur pymongo use
-    # wapas space me decode nahi karta -> password phir galat ho jata.
-    return f"{scheme}{quote(user, safe='')}:{quote(pw, safe='')}@{rest}"
+    return f"{scheme}{u}:{p}@{rest}"
 
 
 MONGO_URI_SAFE = _safe_mongo_uri()

@@ -115,11 +115,14 @@ from config import (
     AI_MODEL,
     AI_MODEL_LITE,
     MONGO_URI_SAFE,
+    MONGO_HOST,
     MONGO_DB,
     MONGO_ENABLED,
     MONGO_PASSWORD,
     MONGO_PASSWORD_STRIPPED,
     MONGO_PLACEHOLDER,
+    _clean_host,
+    _host_looks_wrong,
     AI_SYSTEM_PROMPT,
     AI_MAX_CHARS,
     AI_THINKING_LEVEL,
@@ -302,6 +305,9 @@ async def mongo_start() -> bool:
     global _mongo_ready, _db_cache
     if not MONGO_ENABLED:
         return False
+    _hbad = _host_looks_wrong(_clean_host(MONGO_HOST)) if MONGO_HOST else ""
+    if _hbad:
+        log.error("MongoDB host me galti: %s", _hbad)
     try:
         coll = _mongo_coll()
         await _mongo_coll().database.command("ping")
@@ -1901,12 +1907,15 @@ async def cmd_mongo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sc, bd = fonts.small_caps, fonts.bold
     from urllib.parse import urlsplit
     from urllib.parse import parse_qs
+    host_field = _clean_host(MONGO_HOST)
+    host_bad = _host_looks_wrong(host_field) if MONGO_HOST else ""
     parts = urlsplit(MONGO_URI_SAFE)
     user = (parts.username or "-") if MONGO_URI_SAFE else "-"
     host = (parts.hostname or "-") if MONGO_URI_SAFE else "-"
     q = parse_qs(parts.query)
     pw_len = len(MONGO_PASSWORD) if MONGO_PASSWORD_SET else len(parts.password or "")
     out = [bd("MONGODB TEST"), "",
+           f"{sc('mode')}      : {bd('MONGO_HOST (3 fields)') if MONGO_HOST else sc('MONGO_URI (ek string)')}",
            f"{sc('enabled')}   : {bd(str(MONGO_ENABLED))}",
            f"{sc('host')}      : {host}",
            f"{sc('user')}      : {user}",
@@ -1915,6 +1924,9 @@ async def cmd_mongo(update: Update, context: ContextTypes.DEFAULT_TYPE):
            f"{sc('authSource')}: {q.get('authSource', ['admin (default)'])[0]}",
            f"{sc('database')}  : {MONGO_DB}",
            ""]
+    if host_bad and MONGO_HOST:
+        out.append(f"{bd('HOST ME GALTI')}: {sc(host_bad)}")
+        out.append("")
     if MONGO_PASSWORD_STRIPPED:
         out.append(f"{sc('note')}: password ke aage/peeche se {MONGO_PASSWORD_STRIPPED} "
                    f"extra space/newline hata diya gaya tha.")
