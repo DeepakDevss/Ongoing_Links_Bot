@@ -395,8 +395,21 @@ honest in two ways:
 - **It expires after 24 hours.** A request older than `_REQUEST_TTL` stops counting, and only real
   membership will do after that.
 
-`MIN_JOINS_REQUIRED` defaults to `all`, so every channel listed with `require_join: true` must be
-joined or requested.
+`MIN_JOINS_REQUIRED` defaults to `all`, so **every** block with `require_join: true` must be
+satisfied — currently the four anime channels **and the AI link** (five in total).
+
+### Blocks the bot cannot check: `"verify": "tap"`
+
+The AI link points at **another bot's chat**, not a channel. Telegram gives no way for one bot to learn
+whether a user has started another bot — `getChatMember` does not work there at all. So that block is
+marked `"verify": "tap"`: its button becomes a callback button, and tapping it records the block as
+done and then hands over the link. Marking it `require_join: true` with a normal membership check would
+have made the gate impossible to pass.
+
+Everything else uses the default `"verify": "member"`, which means a real `getChatMember` check (or a
+join request on record). It counts **every** `require_join` block in `LINK_BLOCKS` — not just the ones the
+bot happens to be able to verify, which is what it used to do (so a channel with no ID was silently
+excused and "all" meant fewer channels than configured).
 
 ### Making the gate actually enforce
 
@@ -435,9 +448,14 @@ The gate is **strict and fails closed**:
   a real bug: with ids present but no admin rights every check came back "unknown", the required count
   collapsed to zero, and the gate silently passed people who had joined nothing.
 - The deep-link check ignores the membership cache, so a stale result can never let someone in.
-- **The keyboard shows progress.** After each *Joined / Verify* tap the channel buttons are redrawn —
-  a channel that is joined or has a request on record gets a `✓` and turns green, the rest stay blue.
-  So a member can see at a glance what is done and what is still missing.
+- **The keyboard shows progress, in place.** Each *Joined / Verify* tap edits the very message the
+  button sits on — a channel that is joined **or has a join request on record** gets a `✓` and turns
+  green, the rest stay blue. So the member sees at a glance what is done and what is still missing,
+  without hunting for a new message.
+- **A join request is counted without asking Telegram.** `chat_join_request` is the bot's own record,
+  so it is trusted first — the channel is never queried for it. This matters: if the bot is not an
+  admin it cannot call `getChatMember` at all, and before this the request was ignored and the `✓`
+  never appeared.
 - **The gate message is deleted once you pass.** Both the message the button was on and the earlier
   *5 links + Verify* message are removed (Telegram plays its own fade), and a short *Verified* line is
   sent instead — nothing stale is left behind.

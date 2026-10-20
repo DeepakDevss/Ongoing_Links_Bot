@@ -140,7 +140,7 @@ _db_lock = threading.Lock()
 def _db_default():
     return {"users": {}, "referrals": {}, "banned": [],
             "stats": {"total_started": 0}, "chat_ids": {}, "chats": {},
-            "requests": {}}
+            "requests": {}, "done": {}}
 
 
 def _now():
@@ -292,6 +292,41 @@ def db_add_user(user, bump_start=False):
             data["stats"]["total_started"] = data["stats"].get("total_started", 0) + 1
         _db_save(data)
         return is_new
+
+
+_done_cache = None
+# "tap" se verify hone wale blocks: {user_id: {block_name: ts}}.
+# (Sirf wahan jahan asli membership check MUMKIN hi nahi — jaise kisi bot ka link.)
+_DONE_TTL = 24 * 3600
+
+
+def _dones():
+    global _done_cache
+    if _done_cache is None:
+        with _db_lock:
+            _done_cache = dict(_db_load().get("done", {}))
+    return _done_cache
+
+
+def db_mark_done(user_id, key):
+    global _done_cache
+    with _db_lock:
+        d = _db_load()
+        r = d.setdefault("done", {})
+        r.setdefault(str(user_id), {})[str(key)] = time.time()
+        for k in list(r.keys())[: max(0, len(r) - 5000)]:
+            r.pop(k, None)
+        _db_save(d)
+        _done_cache = dict(r)
+
+
+def is_done(user_id, key) -> bool:
+    per = _dones().get(str(user_id)) or {}
+    ts = per.get(str(key))
+    try:
+        return bool(ts) and (time.time() - float(ts)) < _DONE_TTL
+    except (TypeError, ValueError):
+        return False
 
 
 _requests_cache = None
@@ -703,13 +738,23 @@ def match_block_by_title(title):
     return hits[0] if len(hits) == 1 else None   # ambiguous ho to kuch na karo
 
 
+def _is_tap_block(b) -> bool:
+    """Ye block "tap" se verify hota hai? (Kisi bot ka link — wahan getChatMember
+    chalta hi nahi, isliye membership check mumkin nahi.)"""
+    return (b.get("verify") or "member") == "tap"
+
+
 def enforced_blocks():
-    """Jo blocks force-join ke liye verify ho sakte hain.
-    id config se aati hai, ya runtime me seekhi gayi id se."""
+    """Jo blocks force-join ke liye zaroori hain.
+    "tap" wale blocks ki chat id nahi hoti — unhe bhi shamil karo, warna wo
+    gate se chup-chaap bahar ho jaate."""
     learned = _learned_ids()
     out = []
     for b in LINK_BLOCKS:
         if not b.get("require_join"):
+            continue
+        if _is_tap_block(b):
+            out.append({**b})
             continue
         cid = b.get("id") or learned.get(b["name"])
         if cid:
@@ -786,10 +831,13 @@ async def _is_member(context, chat_id, user_id, force=False):
 
 
 def required_count(total=None) -> int:
-    """Kitne VERIFIABLE blocks join karna zaroori hai.
-    total=None -> enforced_blocks() ka count. 0 -> koi requirement nahi."""
+    """Kitne channels join/request karna zaroori hai (MIN_JOINS_REQUIRED se).
+    total=None -> config me jo bhi require_join: True blocks hain, WO SAARE.
+    Pehle ye sirf VERIFIABLE blocks ginta tha (jin ki id ho) — isliye jin
+    channels ki id nahi thi wo chup-chaap maaf ho jaate the aur "all" ka
+    matlab 4 ke bajaye kam ho jata tha. (Asli bug.)"""
     if total is None:
-        total = len(enforced_blocks())
+        total = sum(1 for b in LINK_BLOCKS if b.get("require_join"))
     if total <= 0:
         return 0
     val = str(MIN_JOINS_REQUIRED).strip().lower()
@@ -814,16 +862,26 @@ async def join_status(context, user_id, force=False):
     force=True -> cache ignore karo, fresh check (Check button ke liye)."""
     joined, missing, unknown = [], [], []
     for chat in enforced_blocks():
+        if _is_tap_block(chat):
+            (joined if is_done(user_id, chat["name"]) else missing).append(chat)
+            continue
+        # Join REQUEST hamara apna record hai (chat_join_request se) — iske liye
+        # channel check ki zaroorat HI nahi. Pehle ye dekho, warna jab bot admin
+        # na ho (_is_member -> None) to request count hi nahi hoti thi aur
+        # keyboard par ✓ kabhi nahi lagta tha. (Asli bug.)
+        if has_request(user_id, chat["id"]):
+            joined.append(chat)
+            continue
         r = await _is_member(context, chat["id"], user_id, force=force)
-        if r is False and has_request(user_id, chat["id"]):
-            r = True      # join REQUEST bhej di -> pass (join hona zaroori nahi)
         if r is True:
             joined.append(chat)
         elif r is False:
             missing.append(chat)
         else:
             unknown.append(chat)
-    need = required_count(len(joined) + len(missing))
+    # need KUL require_join blocks par — sirf verifiable par nahi, warna
+    # unverifiable blocks chup-chaap maaf ho jaate the.
+    need = required_count()
     return joined, missing, unknown, need
 
 
@@ -840,6 +898,9 @@ def gate_report():
     ready, no_id = [], []
     for blk in LINK_BLOCKS:
         if not blk.get("require_join"):
+            continue
+        if _is_tap_block(blk):
+            ready.append(blk["name"])      # tap se verify hota hai, id ki zaroorat nahi
             continue
         cid = blk.get("id") or learned.get(blk["name"])
         (ready if cid else no_id).append(blk["name"])
@@ -897,13 +958,14 @@ def _block_chat_id(blk):
     return int(cid) if cid else None
 
 
-def link_keyboard(extra_rows=None, joined=None):
+def link_keyboard(extra_rows=None, joined=None, tap_done=None):
     """config.py ke LINK_BLOCKS se buttons banao.
     Jinke "row" number same hai, wo ek hi row mein (side-by-side) aate hain.
     `joined` = jin chat ids ki membership verify ho chuki (joined ya request) —
     unke button par ✓ lagta hai aur wo green ho jate hain, taaki user ko turant
     dikhe kaunsa channel ho gaya aur kaunsa baaki hai."""
     done = {int(x) for x in (joined or [])}
+    taps = set(tap_done or [])
     rows = []
     by_row: dict = {}
     order = []
@@ -912,6 +974,13 @@ def link_keyboard(extra_rows=None, joined=None):
         if r not in by_row:
             by_row[r] = []
             order.append(r)
+        if _is_tap_block(b):
+            # Bot ka link — membership check mumkin nahi, tap par mark hota hai.
+            ok = b["name"] in taps
+            label = ("✓ " if ok else "") + fonts.bold(b["name"])
+            by_row[r].append(_btn(label, callback_data=f"gateai:{b['name']}",
+                                  style="success" if ok else "primary"))
+            continue
         cid = _block_chat_id(b)
         ok = cid is not None and cid in done
         label = ("✓ " if ok else "") + fonts.bold(b["name"])   # buttons par emoji nahi
@@ -939,11 +1008,16 @@ def build_welcome(member, chat_title: str) -> str:
     )
 
 
+def _tap_done_names(user_id) -> list:
+    """Jo "tap" wale blocks user ne ho-gaya mark kar liye."""
+    return [b["name"] for b in LINK_BLOCKS if _is_tap_block(b) and is_done(user_id, b["name"])]
+
+
 async def send_join_gate(update, context, edit=False, joined=None):
     text = GATE_MESSAGE
     kb = link_keyboard(extra_rows=[
         [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
-    ], joined=joined)
+    ], joined=joined, tap_done=_tap_done_names(update.effective_user.id))
     sent = None
     if edit and update.callback_query:
         sent = await _safe(update.callback_query.edit_message_text, text, reply_markup=kb)
@@ -1665,7 +1739,7 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Bot jin chats me hai (chahe block se match kare ya na) — poora section.
     out.extend(await _known_chats_lines(context, me))
 
-    need = required_count(verifiable)
+    need = required_count()   # gate wala hi hisaab (saare require_join blocks)
     out.append(sep)
     out.append(f"{sc('total channels')} : {bd(str(len(req_blocks)))}")
     out.append(f"{sc('you joined')}     : {bd(str(joined_count))}")
@@ -1752,6 +1826,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.warning("Promote approve fail: %s", e)
             await q.answer(f"Fail: {_err_hint(e)}", show_alert=True)
+        return
+
+    if data.startswith("gateai:"):
+        # "tap" wala block (kisi bot ka link). Membership check mumkin nahi —
+        # tap ko "ho gaya" maan lo, aur link khol do.
+        name = data.split(":", 1)[1]
+        blk = next((x for x in LINK_BLOCKS if x["name"] == name), None)
+        if not blk:
+            await q.answer()
+            return
+        db_mark_done(user.id, name)
+        await q.answer("Marked as done — opening it now.")
+        try:
+            await context.bot.send_message(
+                update.effective_chat.id,
+                f"{fonts.bold(name)}\n{blk['url']}\n\n"
+                f"{fonts.small_caps('come back here and tap Joined / Verify')}")
+        except Exception:
+            pass
         return
 
     if data.startswith("bs:"):
@@ -1875,29 +1968,31 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     blocked = (need == 0) or (len(joined) < need)
     if blocked:
         await q.answer()
-        if need == 0:
+        if missing:
+            text = JOIN_PROMPT + "\n\n" + ", ".join(b["name"] for b in missing)
+        else:
             text = ("I could not confirm your membership yet. Please join the "
                     "channels below, then tap the button again.")
+        kb = link_keyboard(
+            extra_rows=[[_btn(GATE_BUTTON_TEXT, callback_data="check_join",
+                              style="success")]],
+            joined=joined_ids, tap_done=_tap_done_names(user.id))
+        # USI message ko edit karo jis par user ne tap kiya — isse ✓ wahin
+        # dikhta hai jahan user dekh raha hai (naya message bhejne se wo purane
+        # message me ✓ dhundhta rehta tha).
+        edited = await _safe(q.edit_message_text, text, reply_markup=kb)
+        if edited is not None:
+            _gate_msg[user.id] = (update.effective_chat.id,
+                                  getattr(q.message, "message_id", 0))
         else:
-            text = JOIN_PROMPT
-            if missing:
-                text += "\n\n" + ", ".join(b["name"] for b in missing)
-        _m = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=text,
-            reply_markup=link_keyboard(
-                extra_rows=[[_btn(GATE_BUTTON_TEXT, callback_data="check_join",
-                                  style="success")]],
-                joined=joined_ids),
-        )
-        if getattr(_m, "message_id", None):
-            _gate_msg[user.id] = (update.effective_chat.id, _m.message_id)
-            _prune(_gate_msg, 5000)
-        if need == 0:
+            _m = await context.bot.send_message(
+                chat_id=update.effective_chat.id, text=text, reply_markup=kb)
+            if getattr(_m, "message_id", None):
+                _gate_msg[user.id] = (update.effective_chat.id, _m.message_id)
+        _prune(_gate_msg, 5000)
+        if no_id or unknown:
             await _warn_admin_unverifiable(
-                context, [blk for blk in LINK_BLOCKS
-                          if _block_chat_id(blk) is None
-                          or _block_chat_id(blk) not in joined_ids])
+                context, [blk for blk in LINK_BLOCKS if _block_chat_id(blk) is None])
         return
 
     # Pass. (Ek hi baar answer karo — dobara answer karne par Telegram error deta hai.)
