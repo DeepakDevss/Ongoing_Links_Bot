@@ -372,6 +372,42 @@ fallback.
 them yet, so the bot cannot use them — the group welcome is a normal message, and a channel still sends
 no "member joined" event to any bot.
 
+## Storage — MongoDB Atlas (so nothing expires)
+
+Render's filesystem is **ephemeral**: `data/db.json` is wiped on every deploy, and every post link and
+chat ID built up until then is gone. A **MongoDB Atlas free cluster never expires**, so the bot stores
+its state there.
+
+### How it is wired
+
+The whole app keeps talking to the same in-memory store it always did, and the database sits behind it:
+
+1. **Boot** — `mongo_start()` pings Atlas and loads the single state document into memory. If the
+   collection is empty (first run) the existing `data/db.json` is uploaded as the seed.
+2. **During the run** — every `db_*` write updates memory and sets a **dirty flag**. Nothing touches the
+   network, so no handler ever waits on Mongo.
+3. **Every 5 seconds** — a background task writes the state document if it is dirty.
+4. **Every 10 minutes** — a plain local JSON copy is written as a safety net.
+5. **Shutdown** — one final forced flush.
+
+This is deliberate: making every `db_*` call `async` would have meant rewriting 20+ call sites, and
+awaiting Mongo inside a handler is exactly the kind of block the performance section below is about.
+
+### Setup
+
+1. Create a **free cluster** at [cloud.mongodb.com](https://cloud.mongodb.com) and a database user.
+2. **Network Access → add `0.0.0.0/0`.** This is required — Render's outbound IP is not fixed, so an
+   allow-list of specific IPs will break on the next deploy.
+3. **Database → Connect → Drivers** → copy the string, put your real password in it.
+4. On Render, add it as the environment variable **`MONGO_URI`** (and optionally `MONGO_DB`, default
+   `ongoing_bot`). Leave it unset and the bot falls back to the local file exactly as before.
+
+`/diag` shows the storage line, so you can always see whether Mongo is connected. If it is not, the bot
+still runs — it logs the reason and messages the owner.
+
+**Free tier limits worth knowing:** 0.5 GB storage, 500 connections, ~100 operations/second, and the
+cluster **auto-pauses after 30 days with no connections** (the bot connecting keeps it awake).
+
 ## Performance
 
 The JSON store is read through an in-memory cache, so the whole file is parsed **once** per process

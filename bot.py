@@ -114,6 +114,9 @@ from config import (
     AI_API_KEY,
     AI_MODEL,
     AI_MODEL_LITE,
+    MONGO_URI,
+    MONGO_DB,
+    MONGO_ENABLED,
     AI_SYSTEM_PROMPT,
     AI_MAX_CHARS,
     AI_THINKING_LEVEL,
@@ -154,20 +157,14 @@ def _today():
 _db_cache = None
 
 
-def _db_load():
-    """DB ko memory me cache karo — pehle HAR call poora JSON parse karta tha
-    (~20ms @5000 users). Ab sirf pehli baar. Caller isi dict ko badalta hai aur
-    _db_save() ko deta hai, isliye cache hamesha sync rehta hai."""
-    global _db_cache
-    if _db_cache is not None:
-        return _db_cache
+def _db_load_json():
+    """Local JSON file padho (fallback / pehli-baar seed ke liye)."""
     if os.path.exists(DB_PATH):
         try:
             with open(DB_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
             base = _db_default()
             base.update(data)
-            _db_cache = base
             return base
         except Exception as e:
             # Corrupt DB ko CHUPCHAAP reset MAT karo — warna saara data ud jata
@@ -179,14 +176,36 @@ def _db_load():
                 log.error("Corrupt DB ko %s par bhej diya", bad)
             except Exception:
                 pass
-    _db_cache = _db_default()
+    return _db_default()
+
+
+def _db_load():
+    """State ko memory me cache karo — HAR call par poora JSON parse nahi
+    (~20ms @5000 users). Mongo ho to wo boot par cache bhar deta hai; warna
+    pehli baar local file se aata hai. Caller isi dict ko badalta hai aur
+    _db_save() ko deta hai, isliye cache hamesha sync rehta hai."""
+    global _db_cache
+    if _db_cache is None:
+        _db_cache = _db_load_json()
     return _db_cache
 
 
 def _db_save(data):
-    """JSON likho. Disk full / permission error par CRASH na ho — log karo."""
-    global _db_cache
+    """State save karo.
+    • MongoDB on  -> memory cache + dirty flag (background me flush hota hai).
+                     Per-write JSON NAHI likhte (wo ~77ms leta tha) — JSON
+                     sirf periodic backup banta hai.
+    • MongoDB off -> pehle jaisa seedha JSON file likho (fsync ke saath)."""
+    global _db_cache, _mongo_dirty
     _db_cache = data          # memory cache sync
+    if MONGO_ENABLED:
+        _mongo_dirty = True
+        return
+    _db_write_json(data)
+
+
+def _db_write_json(data):
+    """Local JSON file likho. Disk full / permission error par CRASH na ho."""
     try:
         os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
         tmp = DB_PATH + ".tmp"
@@ -199,6 +218,135 @@ def _db_save(data):
         log.error("DB save fail (disk full / permission?): %s", e)
     except Exception as e:
         log.error("DB save fail: %s", e)
+
+
+# =====================================================================
+#  MONGODB  (durable store)  —  write-behind, RAM cache hot path
+# =====================================================================
+#  Design: har db_* function memory cache ko badalta hai (sync, fast) aur
+#  _db_save() sirf ek "dirty" flag set karta hai. Ek background task har
+#  _MONGO_FLUSH_EVERY second par poori state Mongo me likh deta hai.
+#  Isse poore codebase ko async banane ki zaroorat nahi padi (20+ call sites
+#  sync hi rahe) aur event loop kabhi Mongo ke wait me block nahi hota.
+#  Motor DEPRECATED hai (May 2026) — isliye pymongo ka naya AsyncMongoClient.
+_mongo_client = None
+_mongo_ready = False
+_mongo_dirty = False
+_mongo_last_ok = 0.0
+_MONGO_DOC_ID = "state"
+_MONGO_FLUSH_EVERY = 5          # seconds
+_MONGO_MIRROR_EVERY = 600       # local JSON backup (10 min)
+
+
+def _mongo_coll():
+    global _mongo_client
+    if _mongo_client is None:
+        from pymongo import AsyncMongoClient
+        from pymongo.server_api import ServerApi
+        _mongo_client = AsyncMongoClient(
+            MONGO_URI, server_api=ServerApi("1"),
+            serverSelectionTimeoutMS=8000, connectTimeoutMS=8000,
+            retryWrites=True,
+        )
+    return _mongo_client[MONGO_DB]["state"]
+
+
+def _mongo_doc(data) -> dict:
+    """State ko Mongo document banao (top-level keys, plus _id)."""
+    doc = {k: v for k, v in data.items() if k != "_id"}
+    doc["_id"] = _MONGO_DOC_ID
+    doc["_saved"] = _now()
+    return doc
+
+
+async def mongo_start() -> bool:
+    """Boot par: Mongo se state lo. Khali ho to local JSON seed karo.
+    Koi bhi dikkat -> local file par chalo (bot phir bhi chalta rahe)."""
+    global _mongo_ready, _db_cache
+    if not MONGO_ENABLED:
+        return False
+    try:
+        coll = _mongo_coll()
+        await _mongo_coll().database.command("ping")
+        doc = await coll.find_one({"_id": _MONGO_DOC_ID})
+        if doc:
+            doc.pop("_id", None)
+            doc.pop("_saved", None)
+            base = _db_default()
+            base.update(doc)
+            _db_cache = base
+            _mongo_ready = True
+            log.info("MongoDB connected — state load hui: %s users, %s chats, %s posts.",
+                     len(base.get("users", {})), len(base.get("chats", {})),
+                     len(base.get("posts", {})))
+        else:
+            base = _db_load_json()
+            await coll.replace_one({"_id": _MONGO_DOC_ID}, _mongo_doc(base), upsert=True)
+            _db_cache = base
+            _mongo_ready = True
+            log.info("MongoDB khali thi — local data seed kar diya (%s users).",
+                     len(base.get("users", {})))
+        return True
+    except Exception as e:
+        _mongo_ready = False
+        log.error("MongoDB connect fail: %s — LOCAL FILE par chal raha hoon "
+                  "(data redeploy par ud sakta hai).", e)
+        return False
+
+
+async def mongo_flush(force=False) -> bool:
+    """Dirty ho to poori state Mongo me likh do."""
+    global _mongo_dirty, _mongo_last_ok
+    if not MONGO_ENABLED or not _mongo_ready:
+        return False
+    if not _mongo_dirty and not force:
+        return False
+    _mongo_dirty = False
+    try:
+        data = _db_load()
+        await _mongo_coll().replace_one(
+            {"_id": _MONGO_DOC_ID}, _mongo_doc(data), upsert=True)
+        _mongo_last_ok = time.time()
+        return True
+    except Exception as e:
+        _mongo_dirty = True          # agla flush phir try karega
+        log.warning("MongoDB flush fail: %s", e)
+        return False
+
+
+async def mongo_loop():
+    """Background: dirty hone par flush + thodi-thodi der me local backup."""
+    last_mirror = 0.0
+    while True:
+        await asyncio.sleep(_MONGO_FLUSH_EVERY)
+        try:
+            await mongo_flush()
+            now = time.time()
+            if now - last_mirror > _MONGO_MIRROR_EVERY:
+                last_mirror = now
+                # Mongo hi asli store hai — ye sirf safety copy (fsync ke bina).
+                try:
+                    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+                    with open(DB_PATH + ".tmp", "w", encoding="utf-8") as f:
+                        json.dump(_db_load(), f, ensure_ascii=False)
+                    os.replace(DB_PATH + ".tmp", DB_PATH)
+                except Exception as e:
+                    log.warning("Local mirror fail: %s", e)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("mongo_loop error: %s", e)
+
+
+def mongo_status() -> str:
+    """Insaan ki bhasha me storage ki haalat."""
+    if not MONGO_ENABLED:
+        return "local file (MongoDB set nahi hai)"
+    if not _mongo_ready:
+        return "MongoDB OFFLINE — local file par chal raha hai"
+    age = int(time.time() - _mongo_last_ok) if _mongo_last_ok else -1
+    return ("MongoDB connected" if age < 0 or age < 60
+            else f"MongoDB connected (last save {age}s pehle)")
 
 
 _chat_ids_cache = None
@@ -1077,6 +1225,7 @@ async def _set_commands(app: Application):
 async def verify_blocks_on_startup(app: Application):
     """Start par check: har enforced chat ki id hai? bot admin hai?
     Jo problem mile wo admin ko DM bhi bhejo — sirf log me chhodo mat."""
+    log.info("Storage: %s", mongo_status())
     log.info("PTB %s | button colour: %s | AI prompt: %s",
              telegram.__version__,
              "supported" if _STYLE_OK else "NOT supported",
@@ -1719,6 +1868,7 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _ready, _no_id = gate_report()
     gate_ok = bool(_ready) and not _no_id
     out = [bd("BOT STATUS"), "", sep,
+           f"{sc('storage')} : {bd(mongo_status())}",
            f"{sc('gate')}   : {bd('READY') if gate_ok else bd('NOT READY')}",
            f"{sc('checks')} : {len(_ready)}/{len(_ready) + len(_no_id)} {sc('channels')}",
            sep, ""]
@@ -3318,6 +3468,7 @@ def run_webhook(app: Application):
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         await app.initialize()
+        await _start_mongo(app)
         await verify_blocks_on_startup(app)
         await _rearm_posts(app)
         await app.bot.set_webhook(
@@ -3355,14 +3506,40 @@ def run_webhook(app: Application):
     uvicorn.run(api, host="0.0.0.0", port=PORT, log_level="info", access_log=False)
 
 
+_mongo_task = None
+
+
+async def _start_mongo(app: Application):
+    """Mongo se state load karo + background flush task chalao."""
+    global _mongo_task
+    ok = await mongo_start()
+    if MONGO_ENABLED and not ok:
+        await _notify_owner(
+            app.bot,
+            "⚠️ MongoDB connect nahi hua — bot LOCAL FILE par chal raha hai.\n"
+            "Data redeploy par ud sakta hai.\n\n"
+            "Check karo: MONGO_URI sahi hai? Atlas me Network Access me "
+            "0.0.0.0/0 add hai? (Render ka IP badalta rehta hai.)")
+    if MONGO_ENABLED and _mongo_task is None:
+        _mongo_task = asyncio.create_task(mongo_loop())
+        log.info("Mongo flush loop chalu (har %ss).", _MONGO_FLUSH_EVERY)
+
+
 async def _on_shutdown(app: Application):
     """Bot band ho raha hai. DB memory me hai par HAR write turant disk par
     jaati hai (os.replace + fsync), isliye yahan kuch bachana nahi hai —
     sirf saaf log, taaki Render logs me dikhe."""
-    log.info("Shutting down — sab data already disk par save hai.")
+    if _mongo_task is not None:
+        _mongo_task.cancel()
+    if MONGO_ENABLED:
+        ok = await mongo_flush(force=True)
+        log.info("Shutdown: MongoDB final save %s.", "OK" if ok else "FAIL")
+    else:
+        log.info("Shutting down — data local file par save hai.")
 
 
 async def _polling_post_init(app: Application):
+    await _start_mongo(app)
     await verify_blocks_on_startup(app)
     await _rearm_posts(app)
 

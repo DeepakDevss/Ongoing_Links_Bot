@@ -39,6 +39,20 @@ AI_API_KEY = (
     or "PASTE_YOUR_AI_API_KEY_HERE"
 )
 
+# ---- Storage (MongoDB Atlas) -----------------------------------------
+# Render ka filesystem EPHEMERAL hai — har redeploy par data/db.json ud jata
+# hai aur saare posts/links expire ho jaate hain. MongoDB Atlas ka free
+# cluster KABHI EXPIRE NAHI hota, isliye asli data wahan rakho.
+#
+# Atlas se connection string copy karo (Database > Connect > Drivers):
+#   mongodb+srv://<user>:<password>@<cluster>.mongodb.net/
+# Usme apna password daalo aur poora string MONGO_URI me paste karo.
+# Khali chhodo to bot pehle jaisa local file par chalega.
+MONGO_URI = os.getenv("MONGO_URI", "").strip()
+MONGO_DB = os.getenv("MONGO_DB", "ongoing_bot").strip() or "ongoing_bot"
+# Placeholder wala URI galti se paste ho gaya? Usse "set" mat maano.
+MONGO_ENABLED = bool(MONGO_URI) and "<db_password>" not in MONGO_URI and "<password>" not in MONGO_URI
+
 # #2b  Model IDs. Bot pehle AI_MODEL try karta hai, fail hone par AI_MODEL_LITE.
 #      Oct 2026 ki sthiti (ai.google.dev/gemini-api/docs/models se):
 #        gemini-3.8-flash       <- latest Flash (Sept 2026)      = main
