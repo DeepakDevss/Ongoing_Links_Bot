@@ -270,6 +270,10 @@ def _mongo_error_hint(e) -> str:
     if "server selection" in s or "timed out" in s or "timeout" in s:
         return ("Atlas tak pahunch hi nahi paya. Atlas > Network Access me "
                 "0.0.0.0/0 add hai? (Render ka IP badalta rehta hai.)")
+    if "must be escaped" in s or "rfc 3986" in s or "quote_plus" in s:
+        return ("URI me koi character escape nahi tha (jaise @ ya space).\n"
+                "  • Ye bot ab khud theek kar deta hai — par tabhi jab code naya ho.\n"
+                "  • Render me redeploy kiya? Ya MONGO_PASSWORD me password daal de.")
     if "nodename" in s or "dns" in s or "getaddrinfo" in s:
         return "Cluster ka host galat hai — connection string ka address check kar."
     if "ssl" in s or "tls" in s:

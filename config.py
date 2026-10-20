@@ -10,8 +10,7 @@
 """
 
 import os
-import re
-from urllib.parse import quote_plus, unquote
+from urllib.parse import quote, unquote
 from dotenv import load_dotenv
 
 # .env file (sirf local testing ke liye). Render par .env ki zaroorat nahi.
@@ -69,20 +68,39 @@ MONGO_PASSWORD_STRIPPED = len(_MONGO_PW_RAW) - len(MONGO_PASSWORD)
 
 
 def _safe_mongo_uri() -> str:
-    """MONGO_URI + MONGO_PASSWORD se ek SAHI (percent-encoded) URI banao."""
+    """URI ko ALWAYS saaf karo — username aur password dono ko percent-encode
+    karo, chahe wo URI ke andar ho ya MONGO_PASSWORD me.
+
+    Kyun zaroori hai: pymongo khud mana kar deta hai agar userinfo me koi
+    character escape na ho — error aata hai
+    "Username and password must be escaped according to RFC 3986".
+    Ye '@' ya space jaise characters par hota hai. User se ye expect karna
+    galat hai ki wo khud encode kare — ye code ka kaam hai."""
     uri = MONGO_URI
-    if not uri or not MONGO_PASSWORD:
+    if not uri:
         return uri
-    m = re.match(r"^(mongodb(?:\+srv)?://)([^:@/]*)(?::[^@/]*)?@(.+)$", uri)
-    if not m:
+    i = uri.find("://")
+    if i < 0:
         return uri
-    scheme, user, rest = m.group(1), m.group(2), m.group(3)
-    user = MONGO_USER or unquote(user)      # URI me jo username hai wahi
-    # Atlas har DB user ko `admin` database me banata hai. Default wahi hota
-    # hai, par explicitly likh dene se ek class ki galti hat jati hai.
+    scheme, tail = uri[: i + 3], uri[i + 3:]
+    at = tail.rfind("@")          # host me '@' nahi hota -> aakhri wala hi sahi hai
+    if at < 0:
+        return uri
+    userinfo, rest = tail[:at], tail[at + 1:]
+    if ":" in userinfo:
+        raw_user, raw_pw = userinfo.split(":", 1)
+    else:
+        raw_user, raw_pw = userinfo, ""
+    user = (MONGO_USER or unquote(raw_user)).strip()
+    # MONGO_PASSWORD jeetta hai; warna URI ke andar wala. Dono ko strip karo —
+    # copy-paste me chipka space/newline hi is error ki sabse aam wajah hai.
+    pw = (MONGO_PASSWORD or unquote(raw_pw)).strip()
     if "authSource=" not in rest:
         rest += ("&" if "?" in rest else "?") + "authSource=admin"
-    return f"{scheme}{quote_plus(user)}:{quote_plus(MONGO_PASSWORD)}@{rest}"
+    # quote() use karte hain, quote_plus() nahi: userinfo me space %20 hota
+    # hai, + nahi. quote_plus se space "+" ban jata hai aur pymongo use
+    # wapas space me decode nahi karta -> password phir galat ho jata.
+    return f"{scheme}{quote(user, safe='')}:{quote(pw, safe='')}@{rest}"
 
 
 MONGO_URI_SAFE = _safe_mongo_uri()
