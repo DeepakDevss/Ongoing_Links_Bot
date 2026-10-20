@@ -90,6 +90,7 @@ from config import (
     DB_PATH,
     MEMBERSHIP_CACHE_TTL,
     MIN_JOINS_REQUIRED,
+    DONE_MARK,
     OWNER_ID,
     OWNER_NAME,
     admin_label,
@@ -643,6 +644,11 @@ def db_add_referral(referrer_id, new_user_id):
         if int(new_user_id) not in ref["users"]:
             ref["users"].append(int(new_user_id))
             ref["count"] = len(ref["users"])
+            # Id list ko bound rakho — warna ek popular referrer hazaron ids
+            # jama kar leta aur document 16 MB limit ke kareeb pahunch jata.
+            # `count` exact rehta hai; sirf purani ids girati hain.
+            if len(ref["users"]) > 500:
+                del ref["users"][: len(ref["users"]) - 500]
         data["referrals"][str(referrer_id)] = ref
         _db_save(data)
         return True
@@ -1062,7 +1068,7 @@ async def join_status(context, user_id, force=False):
         # Join REQUEST hamara apna record hai (chat_join_request se) — iske liye
         # channel check ki zaroorat HI nahi. Pehle ye dekho, warna jab bot admin
         # na ho (_is_member -> None) to request count hi nahi hoti thi aur
-        # keyboard par ✓ kabhi nahi lagta tha. (Asli bug.)
+        # keyboard par tick kabhi nahi lagta tha. (Asli bug.)
         if has_request(user_id, chat["id"]):
             joined.append(chat)
             continue
@@ -1186,13 +1192,13 @@ def link_keyboard(extra_rows=None, joined=None, tap_done=None):
         if _is_tap_block(b):
             # Bot ka link — membership check mumkin nahi, tap par mark hota hai.
             ok = b["name"] in taps
-            label = ("√ " if ok else "") + fonts.bold(b["name"])
+            label = (DONE_MARK + " " if ok else "") + fonts.bold(b["name"])
             by_row[r].append(_btn(label, callback_data=f"gateai:{b['name']}",
                                   style="success" if ok else "primary"))
             continue
         cid = _block_chat_id(b)
         ok = cid is not None and _cid_key(cid) in done
-        label = ("√ " if ok else "") + fonts.bold(b["name"])   # buttons par emoji nahi
+        label = (DONE_MARK + " " if ok else "") + fonts.bold(b["name"])   # buttons par emoji nahi
         by_row[r].append(_btn(label, url=b["url"],
                               style="success" if ok else "primary"))
     for r in order:
@@ -3170,7 +3176,7 @@ def _channel_rows(sel) -> list:
         r = []
         for name, cid in row:
             c = _norm_chat_id(cid)
-            mark = "√ " if c in sel else ""
+            mark = DONE_MARK + " " if c in sel else ""
             r.append(_btn(f"{mark}{name}", callback_data=f"postch:{c}",
                           style="success" if c in sel else "primary"))
         rows.append(r)

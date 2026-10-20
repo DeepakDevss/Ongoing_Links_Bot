@@ -285,6 +285,13 @@ MEMBERSHIP_CACHE_TTL = _int_env("MEMBERSHIP_CACHE_TTL", 60)
 #   "all" -> saare required blocks   <-- default (chaaron channels)
 #   "2"   -> kam se kam 2 (jo bhi 2)
 #   "1"   -> sirf 1
+# Done hone ka nishaan (buttons par). `√` (U+221A) ek MATH operator hai —
+# uske side bearings bade hote hain aur weight halka, isliye bold naam ke
+# saath wo ALAG/DETACHED dikhta hai. `✔` (U+2714) HEAVY hai — bold ke saath
+# match karta hai. Saath me U+FE0E (variation selector) lagaya hai taaki wo
+# EMOJI na bane, saada text rahe. Chaho to badal sakte ho.
+DONE_MARK = os.getenv("DONE_MARK", "\u2714\ufe0e")
+
 MIN_JOINS_REQUIRED = os.getenv("MIN_JOINS_REQUIRED", "all")
 
 # Force-join gate par jo message dikhta hai (links ke upar).
