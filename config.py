@@ -58,7 +58,14 @@ MONGO_DB = os.getenv("MONGO_DB", "ongoing_bot").strip() or "ongoing_bot"
 # (code 8000). Ye galti bahut common hai. MONGO_PASSWORD set karo to bot
 # KHUD sahi encode karta hai — tujhe kuch sochna nahi padta.
 MONGO_USER = os.getenv("MONGO_USER", "").strip()
-MONGO_PASSWORD = os.getenv("MONGO_PASSWORD", "")
+# BUG FIX: password ko strip karna ZAROORI hai. Render ke box me paste karte
+# waqt trailing space / newline chipak jaata hai (aur Atlas ka "Copy" button
+# bhi kabhi-kabhi extra character le aata hai). Us ek extra character se
+# password galat ho jata hai aur Atlas bas "bad auth" kehta hai — asli wajah
+# pata nahi chalti. Kitna strip hua, wo yaad rakhte hain taaki /mongo bata sake.
+_MONGO_PW_RAW = os.getenv("MONGO_PASSWORD", "")
+MONGO_PASSWORD = _MONGO_PW_RAW.strip()
+MONGO_PASSWORD_STRIPPED = len(_MONGO_PW_RAW) - len(MONGO_PASSWORD)
 
 
 def _safe_mongo_uri() -> str:
@@ -71,6 +78,10 @@ def _safe_mongo_uri() -> str:
         return uri
     scheme, user, rest = m.group(1), m.group(2), m.group(3)
     user = MONGO_USER or unquote(user)      # URI me jo username hai wahi
+    # Atlas har DB user ko `admin` database me banata hai. Default wahi hota
+    # hai, par explicitly likh dene se ek class ki galti hat jati hai.
+    if "authSource=" not in rest:
+        rest += ("&" if "?" in rest else "?") + "authSource=admin"
     return f"{scheme}{quote_plus(user)}:{quote_plus(MONGO_PASSWORD)}@{rest}"
 
 

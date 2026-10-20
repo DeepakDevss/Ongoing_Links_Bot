@@ -117,6 +117,8 @@ from config import (
     MONGO_URI_SAFE,
     MONGO_DB,
     MONGO_ENABLED,
+    MONGO_PASSWORD,
+    MONGO_PASSWORD_STRIPPED,
     AI_SYSTEM_PROMPT,
     AI_MAX_CHARS,
     AI_THINKING_LEVEL,
@@ -1887,16 +1889,30 @@ async def cmd_mongo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     sc, bd = fonts.small_caps, fonts.bold
     from urllib.parse import urlsplit
+    from urllib.parse import parse_qs
     parts = urlsplit(MONGO_URI_SAFE)
     user = (parts.username or "-") if MONGO_URI_SAFE else "-"
     host = (parts.hostname or "-") if MONGO_URI_SAFE else "-"
+    q = parse_qs(parts.query)
+    pw_len = len(MONGO_PASSWORD) if MONGO_PASSWORD_SET else len(parts.password or "")
     out = [bd("MONGODB TEST"), "",
-           f"{sc('enabled')}  : {bd(str(MONGO_ENABLED))}",
-           f"{sc('host')}     : {host}",
-           f"{sc('user')}     : {user}",
-           f"{sc('password')} : {bd('set (alag se)') if MONGO_PASSWORD_SET else sc('URI ke andar')}",
-           f"{sc('database')} : {MONGO_DB}",
+           f"{sc('enabled')}   : {bd(str(MONGO_ENABLED))}",
+           f"{sc('host')}      : {host}",
+           f"{sc('user')}      : {user}",
+           f"{sc('password')}  : {bd('alag var se') if MONGO_PASSWORD_SET else sc('URI ke andar')}",
+           f"{sc('pw length')} : {bd(str(pw_len))}",
+           f"{sc('authSource')}: {q.get('authSource', ['admin (default)'])[0]}",
+           f"{sc('database')}  : {MONGO_DB}",
            ""]
+    if MONGO_PASSWORD_STRIPPED:
+        out.append(f"{sc('note')}: password ke aage/peeche se {MONGO_PASSWORD_STRIPPED} "
+                   f"extra space/newline hata diya gaya tha.")
+        out.append("")
+    out.append(f"{sc('pw length wahi hai jo Atlas me dikh raha hai? Agar nahi,')}")
+    out.append(f"{sc('to password dobara copy kar — Atlas ka Copy button')}")
+    out.append(f"{sc('kabhi purana password copy kar deta hai. Show dabakar')}")
+    out.append(f"{sc('haath se select karke copy kar.')}")
+    out.append("")
     if not MONGO_ENABLED:
         out.append(f"{sc('MONGO_URI khali hai ya usme placeholder pada hai.')}")
         await _send_long(update.effective_message, "\n".join(out))
