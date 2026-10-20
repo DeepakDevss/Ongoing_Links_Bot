@@ -402,6 +402,18 @@ awaiting Mongo inside a handler is exactly the kind of block the performance sec
 4. On Render, add it as the environment variable **`MONGO_URI`** (and optionally `MONGO_DB`, default
    `ongoing_bot`). Leave it unset and the bot falls back to the local file exactly as before.
 
+**Put the password in its own variable, `MONGO_PASSWORD`.** A password containing `@ # $ / ? ! % &`
+must be percent-encoded before it goes in a URI — drop it in raw and the URI breaks, which Atlas
+reports as the very unhelpful `bad auth : Authentication failed` (code 8000). When `MONGO_PASSWORD` is
+set the bot encodes it itself and rebuilds the URI, so that whole class of mistake disappears. The
+username can stay in `MONGO_URI` (or go in `MONGO_USER`).
+
+**`/mongo`** (owner) runs a live connection test and prints the host, the username, whether a separate
+password is set, the database name, and — if it fails — the real reason. It never prints the password.
+
+Two things that cause `bad auth` almost every time: using your **Atlas account password** instead of the
+**database user's** password, and a password with special characters that was never encoded.
+
 `/diag` shows the storage line, so you can always see whether Mongo is connected. If it is not, the bot
 still runs — it logs the reason and messages the owner.
 

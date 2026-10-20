@@ -10,6 +10,8 @@
 """
 
 import os
+import re
+from urllib.parse import quote_plus, unquote
 from dotenv import load_dotenv
 
 # .env file (sirf local testing ke liye). Render par .env ki zaroorat nahi.
@@ -50,8 +52,31 @@ AI_API_KEY = (
 # Khali chhodo to bot pehle jaisa local file par chalega.
 MONGO_URI = os.getenv("MONGO_URI", "").strip()
 MONGO_DB = os.getenv("MONGO_DB", "ongoing_bot").strip() or "ongoing_bot"
+# Password ko ALAG rakhna behtar hai. Wajah: connection string me password
+# ko percent-encode karna padta hai — @ # $ ! % & jaise characters URI ko
+# tod dete hain, aur tab Atlas "bad auth : Authentication failed" deta hai
+# (code 8000). Ye galti bahut common hai. MONGO_PASSWORD set karo to bot
+# KHUD sahi encode karta hai — tujhe kuch sochna nahi padta.
+MONGO_USER = os.getenv("MONGO_USER", "").strip()
+MONGO_PASSWORD = os.getenv("MONGO_PASSWORD", "")
+
+
+def _safe_mongo_uri() -> str:
+    """MONGO_URI + MONGO_PASSWORD se ek SAHI (percent-encoded) URI banao."""
+    uri = MONGO_URI
+    if not uri or not MONGO_PASSWORD:
+        return uri
+    m = re.match(r"^(mongodb(?:\+srv)?://)([^:@/]*)(?::[^@/]*)?@(.+)$", uri)
+    if not m:
+        return uri
+    scheme, user, rest = m.group(1), m.group(2), m.group(3)
+    user = MONGO_USER or unquote(user)      # URI me jo username hai wahi
+    return f"{scheme}{quote_plus(user)}:{quote_plus(MONGO_PASSWORD)}@{rest}"
+
+
+MONGO_URI_SAFE = _safe_mongo_uri()
 # Placeholder wala URI galti se paste ho gaya? Usse "set" mat maano.
-MONGO_ENABLED = bool(MONGO_URI) and "<db_password>" not in MONGO_URI and "<password>" not in MONGO_URI
+MONGO_ENABLED = bool(MONGO_URI_SAFE) and "<db_password>" not in MONGO_URI_SAFE and "<password>" not in MONGO_URI_SAFE
 
 # #2b  Model IDs. Bot pehle AI_MODEL try karta hai, fail hone par AI_MODEL_LITE.
 #      Oct 2026 ki sthiti (ai.google.dev/gemini-api/docs/models se):

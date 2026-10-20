@@ -114,7 +114,7 @@ from config import (
     AI_API_KEY,
     AI_MODEL,
     AI_MODEL_LITE,
-    MONGO_URI,
+    MONGO_URI_SAFE,
     MONGO_DB,
     MONGO_ENABLED,
     AI_SYSTEM_PROMPT,
@@ -233,6 +233,7 @@ _mongo_client = None
 _mongo_ready = False
 _mongo_dirty = False
 _mongo_last_ok = 0.0
+_mongo_last_err = ""
 _MONGO_DOC_ID = "state"
 _MONGO_FLUSH_EVERY = 5          # seconds
 _MONGO_MIRROR_EVERY = 600       # local JSON backup (10 min)
@@ -244,11 +245,34 @@ def _mongo_coll():
         from pymongo import AsyncMongoClient
         from pymongo.server_api import ServerApi
         _mongo_client = AsyncMongoClient(
-            MONGO_URI, server_api=ServerApi("1"),
+            MONGO_URI_SAFE, server_api=ServerApi("1"),
             serverSelectionTimeoutMS=8000, connectTimeoutMS=8000,
             retryWrites=True,
         )
     return _mongo_client[MONGO_DB]["state"]
+
+
+MONGO_PASSWORD_SET = bool((os.getenv("MONGO_PASSWORD") or "").strip())
+
+
+def _mongo_error_hint(e) -> str:
+    """Mongo error ko seedha, kaam ki baat me badlo. 'bad auth' jaisa generic
+    error user ko confuse karta hai — asli wajah ye teen hi hote hain."""
+    s = str(e).lower()
+    if "bad auth" in s or "authentication failed" in s or "code': 8000" in s:
+        return ("Username ya password galat hai.\n"
+                "  • Atlas > Database Access me apne DB USER ka password reset kar "
+                "— Atlas LOGIN password NAHI, wo alag hota hai.\n"
+                "  • Password me @ # $ / ? ! ho to MONGO_PASSWORD alag se daal — "
+                "bot khud encode kar dega. URI me seedha daalne par wo toot jata hai.")
+    if "server selection" in s or "timed out" in s or "timeout" in s:
+        return ("Atlas tak pahunch hi nahi paya. Atlas > Network Access me "
+                "0.0.0.0/0 add hai? (Render ka IP badalta rehta hai.)")
+    if "nodename" in s or "dns" in s or "getaddrinfo" in s:
+        return "Cluster ka host galat hai — connection string ka address check kar."
+    if "ssl" in s or "tls" in s:
+        return "TLS problem — poora mongodb+srv:// wala string use kar."
+    return "MONGO_URI / MONGO_PASSWORD check kar (aur Render me redeploy kiya?)"
 
 
 def _mongo_doc(data) -> dict:
@@ -288,9 +312,12 @@ async def mongo_start() -> bool:
                      len(base.get("users", {})))
         return True
     except Exception as e:
+        global _mongo_last_err
+        _mongo_last_err = e
         _mongo_ready = False
-        log.error("MongoDB connect fail: %s — LOCAL FILE par chal raha hoon "
-                  "(data redeploy par ud sakta hai).", e)
+        log.error("MongoDB connect fail: %s", e)
+        log.error("MongoDB wajah: %s", _mongo_error_hint(e).replace("\n", " | "))
+        log.error("LOCAL FILE par chal raha hoon — data redeploy par ud sakta hai.")
         return False
 
 
@@ -1393,6 +1420,7 @@ _COMMANDS = [
     ("posts",      "list your posts",                  "admin"),
     ("stats",     "bot and community overview",        "owner"),
     ("diag",      "setup check: gate, IDs, perms",     "owner"),
+    ("mongo",     "test the MongoDB connection",       "owner"),
     ("chats",     "every chat the bot is in",          "owner"),
     ("perms",     "the bot's permissions here",        "owner"),
     ("getid",     "get a chat's numeric ID",           "owner"),
@@ -1850,6 +1878,43 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     me = await _get_me(context)
     lines = await _known_chats_lines(context, me)
     await _send_long(update.effective_message, "\n".join(lines).strip())
+
+
+async def cmd_mongo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner: MongoDB ka LIVE test — username/host dikhao aur abhi connect karke
+    dekho. Password kabhi print nahi hota."""
+    if not await _need_owner(update):
+        return
+    sc, bd = fonts.small_caps, fonts.bold
+    from urllib.parse import urlsplit
+    parts = urlsplit(MONGO_URI_SAFE)
+    user = (parts.username or "-") if MONGO_URI_SAFE else "-"
+    host = (parts.hostname or "-") if MONGO_URI_SAFE else "-"
+    out = [bd("MONGODB TEST"), "",
+           f"{sc('enabled')}  : {bd(str(MONGO_ENABLED))}",
+           f"{sc('host')}     : {host}",
+           f"{sc('user')}     : {user}",
+           f"{sc('password')} : {bd('set (alag se)') if MONGO_PASSWORD_SET else sc('URI ke andar')}",
+           f"{sc('database')} : {MONGO_DB}",
+           ""]
+    if not MONGO_ENABLED:
+        out.append(f"{sc('MONGO_URI khali hai ya usme placeholder pada hai.')}")
+        await _send_long(update.effective_message, "\n".join(out))
+        return
+    # LIVE test
+    global _mongo_client
+    _mongo_client = None                     # purana client hatao, fresh banao
+    try:
+        await _mongo_coll().database.command("ping")
+        out.append(f"{sc('result')}   : {bd('CONNECTED')}")
+        out.append(f"{sc('saving to MongoDB is working')}")
+    except Exception as e:
+        out.append(f"{sc('result')}   : {bd('FAILED')}")
+        out.append("")
+        out.append(_mongo_error_hint(e))
+        out.append("")
+        out.append(f"{sc('raw error')}: {str(e)[:200]}")
+    await _send_long(update.effective_message, "\n".join(out))
 
 
 async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3411,6 +3476,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("getid", cmd_getid))
     app.add_handler(CommandHandler("setid", cmd_setid))
     app.add_handler(CommandHandler("diag", cmd_diag))
+    app.add_handler(CommandHandler("mongo", cmd_mongo))
     app.add_handler(CommandHandler("chats", cmd_chats))
     app.add_handler(CommandHandler("rules", cmd_rules))
     app.add_handler(CommandHandler("report", cmd_report))
@@ -3518,8 +3584,8 @@ async def _start_mongo(app: Application):
             app.bot,
             "⚠️ MongoDB connect nahi hua — bot LOCAL FILE par chal raha hai.\n"
             "Data redeploy par ud sakta hai.\n\n"
-            "Check karo: MONGO_URI sahi hai? Atlas me Network Access me "
-            "0.0.0.0/0 add hai? (Render ka IP badalta rehta hai.)")
+            f"{_mongo_error_hint(_mongo_last_err)}\n\n"
+            "Live test: /mongo")
     if MONGO_ENABLED and _mongo_task is None:
         _mongo_task = asyncio.create_task(mongo_loop())
         log.info("Mongo flush loop chalu (har %ss).", _MONGO_FLUSH_EVERY)
