@@ -3,7 +3,8 @@
 # =====================================================================
 #  This file only works with Render's "New + -> Blueprint" deploy.
 #  With a normal "Web Service" deploy Render ignores it — then set the
-#  Build/Start commands yourself (see README):
+#  Build/Start commands and the environment variables yourself in the
+#  Dashboard (see README).
 #     Build Command: pip install -r requirements.txt
 #     Start Command: python bot.py
 #
@@ -20,23 +21,37 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.13"
+      # ---- Required ----
       # sync: false  ->  value is entered in the Render Dashboard (secret)
       - key: BOT_TOKEN
         sync: false
-      - key: BOT_USERNAME
+      - key: OWNER_ID            # MISSING THA — isi se owner ko power milti hai
         sync: false
-      - key: BOT_BRAND
-        value: "Ongoing"
       - key: AI_API_KEY
         sync: false
       - key: ADMIN_IDS
         sync: false
       - key: ADMIN_NAMES
         sync: false
-      # Optional (defaults already set in config.py):
+      # ---- Storage (so posts/links survive a redeploy) ----
+      # Atlas ka poora connection string. Atlas > Network Access me
+      # 0.0.0.0/0 add karna ZAROORI hai (Render ka outbound IP badalta hai).
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: "ongoing_bot"
+      # ---- Optional (defaults already set in config.py) ----
+      - key: BOT_BRAND
+        value: "Ongoing"
+      - key: BOT_USERNAME
+        sync: false
+      - key: NOTIFY_OWNER
+        value: "False"
       # - key: AI_MODEL
-      #   value: gemini-3.5-flash
+      #   value: gemini-3.8-flash
       # - key: AI_MODEL_LITE
       #   value: gemini-3.5-flash-lite
       - key: JOIN_FAIL_MODE
         value: "closed"
+      - key: MIN_JOINS_REQUIRED
+        value: "all"
