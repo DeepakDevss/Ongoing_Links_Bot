@@ -354,6 +354,24 @@ never kill a handler or leave a user with silence:
 `/broadcast` distinguishes the three outcomes — **sent**, **blocked the bot**, and **failed** — and
 keeps a jittered delay between sends so it stays under Telegram's ~1 msg/sec per chat limit.
 
+## Versions and what is current (October 2026)
+
+| Piece | Version in use | Note |
+| --- | --- | --- |
+| python-telegram-bot | 22.8 | The latest on PyPI. It implements **Bot API 10.0** |
+| Bot API (Telegram) | 10.0 via PTB | The newest is **10.3** (24 Aug 2026) |
+| `google-genai` | 2.31.0 | Pinned `>=2.0,<3` |
+| Python | 3.12 | |
+
+**AI models.** `gemini-3.5-flash` is **deprecated** — the endpoint now auto-routes to `gemini-3.6-flash`.
+The bot uses `gemini-3.8-flash` as the main model and `gemini-3.5-flash-lite` (still current) as the
+fallback.
+
+**Not yet available.** Bot API 10.1–10.3 added ephemeral messages (a private reply inside a group),
+`DisabledButton`, and the `can_send_welcome_messages` admin right. python-telegram-bot has not shipped
+them yet, so the bot cannot use them — the group welcome is a normal message, and a channel still sends
+no "member joined" event to any bot.
+
 ## Performance
 
 The JSON store is read through an in-memory cache, so the whole file is parsed **once** per process

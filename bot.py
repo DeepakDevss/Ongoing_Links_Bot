@@ -992,13 +992,13 @@ def link_keyboard(extra_rows=None, joined=None, tap_done=None):
         if _is_tap_block(b):
             # Bot ka link — membership check mumkin nahi, tap par mark hota hai.
             ok = b["name"] in taps
-            label = ("✓ " if ok else "") + fonts.bold(b["name"])
+            label = ("√ " if ok else "") + fonts.bold(b["name"])
             by_row[r].append(_btn(label, callback_data=f"gateai:{b['name']}",
                                   style="success" if ok else "primary"))
             continue
         cid = _block_chat_id(b)
         ok = cid is not None and _cid_key(cid) in done
-        label = ("✓ " if ok else "") + fonts.bold(b["name"])   # buttons par emoji nahi
+        label = ("√ " if ok else "") + fonts.bold(b["name"])   # buttons par emoji nahi
         by_row[r].append(_btn(label, url=b["url"],
                               style="success" if ok else "primary"))
     for r in order:

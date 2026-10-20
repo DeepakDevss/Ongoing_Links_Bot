@@ -40,10 +40,16 @@ AI_API_KEY = (
 )
 
 # #2b  Model IDs. Bot pehle AI_MODEL try karta hai, fail hone par AI_MODEL_LITE.
+#      Oct 2026 ki sthiti (ai.google.dev/gemini-api/docs/models se):
+#        gemini-3.8-flash       <- latest Flash (Sept 2026)      = main
+#        gemini-3.6-flash       <- pichhla Flash
+#        gemini-3.5-flash-lite  <- latest Flash-Lite (Jul 2026)  = fallback
+#        gemini-3.5-flash       <- PURANA: auto-route ho raha hai
+#                                  gemini-3.6-flash par. Isliye hata diya.
 #      Defaults:
 #        AI_MODEL      = gemini-3.5-flash
 #        AI_MODEL_LITE = gemini-3.5-flash-lite
-AI_MODEL = os.getenv("AI_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.5-flash"
+AI_MODEL = os.getenv("AI_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.8-flash"
 AI_MODEL_LITE = (
     os.getenv("AI_MODEL_LITE")
     or os.getenv("GEMINI_MODEL_LITE")
