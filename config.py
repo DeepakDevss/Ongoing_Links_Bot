@@ -119,16 +119,11 @@ LINK_BLOCKS = [
     {
         "name": "AI",
         "emoji": "🤖",
-        "url": "https://t.me/Linnet_Agents_Bot",
-        "id": None,
+        "url": "https://t.me/LinnetAICommunity",
+        # Public group ka @username bhi chalega (numeric id ki tarah). Isse
+        # membership SACH ME check hoti hai — tap ka jhol nahi.
+        "id": "@LinnetAICommunity",
         "require_join": True,
-        # "verify": "tap"  -> ye ek BOT ka link hai, channel nahi. Telegram kisi
-        # bot ko ye batane ka koi tareeka nahi deta ki user ne DOOSRE bot ko
-        # start kiya hai ya nahi (getChatMember wahan chalta hi nahi). Isliye
-        # ise "tap" se verify karte hain: user jab is button par tap karta hai,
-        # bot use ho-gaya mark kar deta hai aur link khol deta hai.
-        # "verify": "member" (default) -> asli membership check hota hai.
-        "verify": "tap",
         "row": 1,          # AI akela, apni row mein
     },
     {

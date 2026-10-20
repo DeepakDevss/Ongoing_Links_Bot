@@ -400,14 +400,14 @@ satisfied — currently the four anime channels **and the AI link** (five in tot
 
 ### Blocks the bot cannot check: `"verify": "tap"`
 
-The AI link points at **another bot's chat**, not a channel. Telegram gives no way for one bot to learn
-whether a user has started another bot — `getChatMember` does not work there at all. So that block is
-marked `"verify": "tap"`: its button becomes a callback button, and tapping it records the block as
-done and then hands over the link. Marking it `require_join: true` with a normal membership check would
-have made the gate impossible to pass.
+A block can be verified two ways:
 
-Everything else uses the default `"verify": "member"`, which means a real `getChatMember` check (or a
-join request on record). It counts **every** `require_join` block in `LINK_BLOCKS` — not just the ones the
+- **`"verify": "member"`** (the default) — a real `getChatMember` check, or a join request on record.
+  `"id"` may be a numeric id **or** a public `@username`; both work.
+- **`"verify": "tap"`** — for links the bot genuinely cannot check, such as **another bot's chat**
+  (Telegram gives no way for one bot to learn whether a user started another bot — `getChatMember` does
+  not work there). The button becomes a callback button; tapping it records the block as done and then
+  hands over the link. Only use this where a real check is impossible — a tap is not proof. It counts **every** `require_join` block in `LINK_BLOCKS` — not just the ones the
 bot happens to be able to verify, which is what it used to do (so a channel with no ID was silently
 excused and "all" meant fewer channels than configured).
 
@@ -459,8 +459,9 @@ The gate is **strict and fails closed**:
 - **The gate message is deleted once you pass.** Both the message the button was on and the earlier
   *5 links + Verify* message are removed (Telegram plays its own fade), and a short *Verified* line is
   sent instead — nothing stale is left behind.
-- **The owner and admins never see the gate.** `/start` shows them the channel links for reference but
-  no *Joined / Verify* button, and a `/post` deep link takes them straight to the download button.
+- **Only the owner skips the gate.** The owner's `/start` is just the welcome — no channel buttons and
+  no *Joined / Verify*, and a `/post` deep link takes them straight to the download button. Admins and
+  members both see the five links with *Joined / Verify*.
 
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
@@ -485,6 +486,9 @@ The gate is **strict and fails closed**:
 - The command list is registered with `setMyCommands` at startup, so the commands appear in
   Telegram's `/` menu — the member list by default, the admin list for each `ADMIN_IDS`, and every
   command for the owner. Without this the commands exist but stay invisible.
+- `/help` descriptions are kept to **one short line** each. Long descriptions wrap to two or three
+  lines on a phone and make the whole list look cluttered. Argument hints (`/kick <user_id>`,
+  `/ai <question>`) live in a small footer instead of on every line.
 
 ### The AI's instructions
 

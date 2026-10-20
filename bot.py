@@ -358,7 +358,7 @@ def db_add_request(user_id, chat_id):
         d = _db_load()
         r = d.setdefault("requests", {})
         per = _per_user(r.get(str(user_id)))
-        per[str(int(chat_id))] = time.time()
+        per[_cid_key(chat_id)] = time.time()
         r[str(user_id)] = per
         for k in list(r.keys())[: max(0, len(r) - 5000)]:
             r.pop(k, None)                      # bound rakho
@@ -376,7 +376,7 @@ def db_del_request(user_id, chat_id):
         if str(user_id) not in r:
             return
         per = _per_user(r.get(str(user_id)))
-        per.pop(str(int(chat_id)), None)
+        per.pop(_cid_key(chat_id), None)
         if per:
             r[str(user_id)] = per
         else:
@@ -393,7 +393,7 @@ def has_request(user_id, chat_id) -> bool:
         return False
     if isinstance(per, list):                   # purana format
         return int(chat_id) in per
-    ts = per.get(str(int(chat_id)))
+    ts = per.get(_cid_key(chat_id))
     try:
         return bool(ts) and (time.time() - float(ts)) < _REQUEST_TTL
     except (TypeError, ValueError):
@@ -908,8 +908,9 @@ def gate_report():
 
 
 async def needs_join(context, user_id, force=False) -> bool:
-    """User ko gate dikhana hai? Owner/admin ko nahi."""
-    if is_privileged(user_id):
+    """User ko gate dikhana hai? SIRF OWNER ko nahi — admin aur member dono
+    ko dikhta hai (owner ke paas sab pehle se hai, usko kuch join nahi karna)."""
+    if is_owner(user_id):
         return False
     if not has_required_blocks():
         return False
@@ -952,10 +953,24 @@ def _btn(label, **kw):
     return InlineKeyboardButton(label, **kw)
 
 
+def _cid_key(chat_id) -> str:
+    """Chat id ka dict-key. Numeric (-100...) ya @username — dono chalte hain."""
+    try:
+        return str(int(chat_id))
+    except (TypeError, ValueError):
+        return str(chat_id or "").strip()
+
+
 def _block_chat_id(blk):
-    """Us block ki chat id (config se ya runtime me seekhi hui)."""
+    """Us block ki chat id (config se ya runtime me seekhi hui).
+    int(-100123...) YA "@username" — dono ho sakte hain."""
     cid = blk.get("id") or _learned_ids().get(blk["name"])
-    return int(cid) if cid else None
+    if not cid:
+        return None
+    try:
+        return int(cid)
+    except (TypeError, ValueError):
+        return str(cid).strip()
 
 
 def link_keyboard(extra_rows=None, joined=None, tap_done=None):
@@ -964,7 +979,7 @@ def link_keyboard(extra_rows=None, joined=None, tap_done=None):
     `joined` = jin chat ids ki membership verify ho chuki (joined ya request) —
     unke button par ✓ lagta hai aur wo green ho jate hain, taaki user ko turant
     dikhe kaunsa channel ho gaya aur kaunsa baaki hai."""
-    done = {int(x) for x in (joined or [])}
+    done = {_cid_key(x) for x in (joined or [])}
     taps = set(tap_done or [])
     rows = []
     by_row: dict = {}
@@ -982,7 +997,7 @@ def link_keyboard(extra_rows=None, joined=None, tap_done=None):
                                   style="success" if ok else "primary"))
             continue
         cid = _block_chat_id(b)
-        ok = cid is not None and cid in done
+        ok = cid is not None and _cid_key(cid) in done
         label = ("✓ " if ok else "") + fonts.bold(b["name"])   # buttons par emoji nahi
         by_row[r].append(_btn(label, url=b["url"],
                               style="success" if ok else "primary"))
@@ -1190,48 +1205,52 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # channels ke 5 links yahan bhi dikhte hain (join karna chahe to kar le).
     # Owner/admin ko verify ki zaroorat NAHI — unke liye seedha. Sirf links
     # reference ke liye, Verify button nahi.
-    extra = [] if is_privileged(user.id) else [
-        [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")]]
+    # Owner ke liye kuch nahi (na channels, na Verify) — seedha welcome.
+    # Admin aur member dono ko wahi 5 links + Joined / Verify milte hain.
+    head = (f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
+            f"I am {fonts.bold(BOT_BRAND)}. Just type your question.")
+    if is_owner(user.id):
+        await update.effective_message.reply_text(head)
+        return
     await update.effective_message.reply_text(
-        f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
-        f"I am {fonts.bold(BOT_BRAND)}. Just type your question.\n\n"
-        f"{fonts.small_caps('our channels')}:",
-        reply_markup=link_keyboard(extra_rows=extra),
+        head + f"\n\n{fonts.small_caps('our channels')}:",
+        reply_markup=link_keyboard(extra_rows=[
+            [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")]]),
     )
 
 
 # (command, short description, min role)   role: member | admin | owner
 # POSTCMD = POST_COMMAND ka placeholder (naam config se aata hai).
 _COMMANDS = [
-    # ---- member ----
-    ("start",    "open the bot, see our channels and verify your join",  "member"),
-    ("help",     "show the commands you can use",                        "member"),
-    ("id",       "show your Telegram user ID",                           "member"),
-    ("ai",       "ask the assistant directly:  /ai <question>",          "member"),
-    ("rules",    "read the community rules",                             "member"),
-    ("report",   "reply to a message to report it to the admins",        "member"),
-    ("ref",      "your invite link and how many people joined through it", "member"),
-    # ---- admin ----
-    ("admins",     "list the team (owner and admins)",                   "admin"),
-    ("settitle",   "rename this group:  /settitle <new name>",           "admin"),
-    ("invitelink", "create a fresh invite link for this chat",           "admin"),
-    ("kick",       "remove someone:  /kick <user_id>",                   "admin"),
-    ("unkick",     "undo a kick or ban:  /unkick <user_id>",             "admin"),
-    ("del",        "delete a message - reply to it with /del",           "admin"),
-    ("pin",        "pin a message - reply to it with /pin",              "admin"),
-    ("promote",    "make someone an admin:  /promote <user_id>",         "admin"),
-    ("POSTCMD",    "build a channel post with a tracked download link",  "admin"),
-    ("posts",      "list the posts you have built",                      "admin"),
-    # ---- owner ----
-    ("stats",     "bot and community overview, with live member counts",  "owner"),
-    ("diag",      "full setup check: join gate, chat IDs, permissions",   "owner"),
-    ("chats",     "every chat the bot is in, with its ID and type",       "owner"),
-    ("perms",     "what the bot is allowed to do in this chat",           "owner"),
-    ("getid",     "get a chat's numeric ID - forward a message from it",  "owner"),
-    ("setid",     "bind a block to a chat ID:  /setid <block> <ID>",      "owner"),
-    ("broadcast", "message everyone who has started the bot",             "owner"),
-    ("ban",       "ban someone from the bot:  /ban <user_id>",            "owner"),
-    ("unban",     "lift a bot ban:  /unban <user_id>",                    "owner"),
+    # (command, chhota description, min role)   role: member | admin | owner
+    # Description JITNI CHHOTI, UTNA SAFAF — lambi line mobile par 2-3 line
+    # le leti hai aur poora list bhara-bhara lagta hai.
+    ("start",    "open the bot, see our channels",     "member"),
+    ("help",     "show this list",                     "member"),
+    ("id",       "your Telegram user ID",              "member"),
+    ("ai",       "ask the assistant a question",       "member"),
+    ("rules",    "read the community rules",           "member"),
+    ("report",   "report a message to the admins",     "member"),
+    ("ref",      "your invite link and count",         "member"),
+    ("admins",     "list the team",                    "admin"),
+    ("settitle",   "rename this group",                "admin"),
+    ("invitelink", "create an invite link",            "admin"),
+    ("kick",       "remove someone",                   "admin"),
+    ("unkick",     "undo a kick or ban",               "admin"),
+    ("del",        "delete a message (reply)",         "admin"),
+    ("pin",        "pin a message (reply)",            "admin"),
+    ("promote",    "make someone an admin",            "admin"),
+    ("POSTCMD",    "build a channel post",             "admin"),
+    ("posts",      "list your posts",                  "admin"),
+    ("stats",     "bot and community overview",        "owner"),
+    ("diag",      "setup check: gate, IDs, perms",     "owner"),
+    ("chats",     "every chat the bot is in",          "owner"),
+    ("perms",     "the bot's permissions here",        "owner"),
+    ("getid",     "get a chat's numeric ID",           "owner"),
+    ("setid",     "bind a block to a chat ID",         "owner"),
+    ("broadcast", "message everyone who started",      "owner"),
+    ("ban",       "ban someone from the bot",          "owner"),
+    ("unban",     "lift a bot ban",                    "owner"),
 ]
 
 
@@ -1241,24 +1260,35 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     unki list poori lagti hai. Owner ko sab dikhta hai (★ = sirf owner)."""
     uid = update.effective_user.id
     sc, bd = fonts.small_caps, fonts.bold
+    sep = "━━━━━━━━━━━━━━━━━"
     lvl = 2 if is_owner(uid) else (1 if is_admin(uid) else 0)
     rank = {"member": 0, "admin": 1, "owner": 2}
     out = [bd("COMMANDS"), "",
-           f"{sc('type any command below, or just write to me normally')}", ""]
+           f"{sc('tap a command, or just write to me')}", ""]
+    last_rank = None
     for c, d, r in _COMMANDS:
         if rank[r] > lvl:
             continue
+        # Ek se zyada group dikh rahe hain to unke beech ek khaali line —
+        # padhne me aasan. Member ko sirf ek group dikhta hai, to flat.
+        if last_rank is not None and rank[r] != last_rank:
+            out.append("")
+        last_rank = rank[r]
         name = POST_COMMAND if c == "POSTCMD" else c
         star = "★ " if (lvl == 2 and rank[r] == 2) else ""
         out.append(f"{star}/{name} — {d}")
-    out.append("")
     _uname = ("@" + context.bot.username) if getattr(context.bot, "username", None) else BOT_USERNAME
-    out.append(f"{sc('chat')}: just type in DM. In a group, mention {_uname}.")
+    out += ["", sep]
     if lvl >= 1:
-        out.append(f"{sc('group commands only work in a group — the bot must be an admin there')}")
+        out.append(f"{sc('needs a user id')} :  /kick 12345678   {sc('or reply with')} /kick")
+    out += [f"{sc('needs text')}     :  /ai your question",
+            f"{sc('dm')}            :  just write to me",
+            f"{sc('in a group')}    :  mention {_uname}",
+            sep]
+    if lvl >= 1:
+        out.append(f"{sc('group commands need the bot to be an admin')}")
     if lvl == 2:
-        out.append("")
-        out.append(f"{sc('★ = owner only')}  •  {sc('you have all permissions')}")
+        out.append(f"{sc('★ = owner only')}")
     await _send_long(update.effective_message, "\n".join(out).strip())
 
 
