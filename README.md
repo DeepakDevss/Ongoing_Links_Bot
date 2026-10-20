@@ -337,6 +337,21 @@ delete that variable to pick up the new default.
 
 ---
 
+## Performance
+
+The JSON store is read through an in-memory cache, so the whole file is parsed **once** per process
+instead of on every call. Measured with 5,000 users:
+
+| Operation | Before | After |
+| --- | --- | --- |
+| `_db_load()` | 20,123 µs | **1.2 µs** |
+| `db_add_user()` (repeat user) | 101,744 µs | **1.0 µs** |
+| `db_is_banned()` | 23 µs | **0.4 µs** |
+| `has_request()` | 21.7 µs | **0.6 µs** |
+
+The only remaining blocking write is a **new** user's first insert (~77 ms — a full JSON rewrite plus
+`fsync`), which happens once per user and then not again for five minutes.
+
 ## Force-Join Gate
 
 **The gate is not used for chatting.** Plain DMs, `/start` and `/ai` all work with zero joins. Plain
@@ -406,6 +421,11 @@ The gate is **strict and fails closed**:
 - **The keyboard shows progress.** After each *Joined / Verify* tap the channel buttons are redrawn —
   a channel that is joined or has a request on record gets a `✓` and turns green, the rest stay blue.
   So a member can see at a glance what is done and what is still missing.
+- **The gate message is deleted once you pass.** Both the message the button was on and the earlier
+  *5 links + Verify* message are removed (Telegram plays its own fade), and a short *Verified* line is
+  sent instead — nothing stale is left behind.
+- **The owner and admins never see the gate.** `/start` shows them the channel links for reference but
+  no *Joined / Verify* button, and a `/post` deep link takes them straight to the download button.
 
 - `LINK_BLOCKS` groups the required chats so they can be shown as buttons in the join prompt. Those buttons are sent with `style="primary"` (blue) and the verify button with `style="success"` (green) — button colours need Telegram clients from after 9 Feb 2026; older clients ignore the style.
 - The verify button reads `GATE_BUTTON_TEXT` (default `Joined / Verify`).
@@ -487,6 +507,8 @@ Adding the bot to a group does not bypass the gate. Group members are subject to
 | Users are always blocked | `MIN_JOINS_REQUIRED` higher than the number of configured chats | Lower the value or add the missing chat IDs |
 | Join buttons show wrong chats | `LINK_BLOCKS` or chat IDs are incorrect | Re-check IDs with `/getid` and update `config.py` |
 | Data resets after deploy | Ephemeral filesystem | Attach a persistent disk and set the database path to it |
+| No welcome in a channel | Telegram sends no "member joined" event for channels | This is a platform limit — channels only report *join requests* (`chat_join_request`), which the bot already handles. Welcomes work in groups and supergroups |
+| Welcome image missing | `welcome.png` not found from the working directory | The bot now searches the working directory, `assets/`, and the folder `bot.py` itself lives in, and falls back to a text-only welcome. Check the startup log for `Welcome image nahi mili` |
 | Buttons have no colour | An old Telegram client, or you are looking at an **old message** | Button colour is a **client** feature — Telegram silently ignores `style` on clients older than 9 Feb 2026, and old messages keep the keyboard they were sent with. Two checks: (1) run `/btnstyle` — it sends three action buttons *and* two link buttons, all coloured, and prints the exact JSON being sent; (2) open **https://web.telegram.org** and run `/btnstyle` there — Telegram Web is always the newest build, so coloured buttons there prove the phone app is the old one. Also send `/start` fresh rather than scrolling back |
 | Bot still behaves like an older version | `AI_SYSTEM_PROMPT` set in the environment overrides the built-in prompt | Delete `AI_SYSTEM_PROMPT` from the Render environment |
 | Every AI reply says "busy" | `AI_API_KEY` is missing | The startup log warns about this explicitly — set the key |

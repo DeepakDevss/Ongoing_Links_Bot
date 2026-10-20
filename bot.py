@@ -69,7 +69,6 @@ from config import (
     LINK_BLOCKS,
     JOIN_FAIL_MODE,
     WELCOME_TEMPLATE,
-    WELCOME_IMAGE,
     WEBHOOK_URL,
     WEBHOOK_SECRET,
     PORT,
@@ -137,13 +136,23 @@ def _today():
     return datetime.now(timezone.utc).strftime("%d %b %Y")
 
 
+_db_cache = None
+
+
 def _db_load():
+    """DB ko memory me cache karo — pehle HAR call poora JSON parse karta tha
+    (~20ms @5000 users). Ab sirf pehli baar. Caller isi dict ko badalta hai aur
+    _db_save() ko deta hai, isliye cache hamesha sync rehta hai."""
+    global _db_cache
+    if _db_cache is not None:
+        return _db_cache
     if os.path.exists(DB_PATH):
         try:
             with open(DB_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
             base = _db_default()
             base.update(data)
+            _db_cache = base
             return base
         except Exception as e:
             # Corrupt DB ko CHUPCHAAP reset MAT karo — warna saara data ud jata
@@ -155,11 +164,14 @@ def _db_load():
                 log.error("Corrupt DB ko %s par bhej diya", bad)
             except Exception:
                 pass
-    return _db_default()
+    _db_cache = _db_default()
+    return _db_cache
 
 
 def _db_save(data):
     """JSON likho. Disk full / permission error par CRASH na ho — log karo."""
+    global _db_cache
+    _db_cache = data          # memory cache sync
     try:
         os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
         tmp = DB_PATH + ".tmp"
@@ -891,15 +903,22 @@ def build_welcome(member, chat_title: str) -> str:
     )
 
 
-async def send_join_gate(update: Update, context, edit=False, joined=None):
+async def send_join_gate(update, context, edit=False, joined=None):
     text = GATE_MESSAGE
     kb = link_keyboard(extra_rows=[
         [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
     ], joined=joined)
+    sent = None
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb)
+        sent = update.callback_query.message
     else:
-        await update.effective_message.reply_text(text, reply_markup=kb)
+        sent = await update.effective_message.reply_text(text, reply_markup=kb)
+    uid = update.effective_user.id
+    if sent is not None and getattr(sent, "message_id", None):
+        _gate_msg[uid] = (getattr(sent, "chat_id", update.effective_chat.id),
+                          sent.message_id)
+        _prune(_gate_msg, 5000)
 
 
 async def _set_commands(app: Application):
@@ -1059,13 +1078,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # DM me bot se baat karne ke liye koi join/request zaroori NAHI — bas
     # channels ke 5 links yahan bhi dikhte hain (join karna chahe to kar le).
+    # Owner/admin ko verify ki zaroorat NAHI — unke liye seedha. Sirf links
+    # reference ke liye, Verify button nahi.
+    extra = [] if is_privileged(user.id) else [
+        [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")]]
     await update.effective_message.reply_text(
         f"{fonts.bold('Welcome, ' + (user.first_name or 'friend'))}\n\n"
         f"I am {fonts.bold(BOT_BRAND)}. Just type your question.\n\n"
         f"{fonts.small_caps('our channels')}:",
-        reply_markup=link_keyboard(extra_rows=[
-            [_btn(GATE_BUTTON_TEXT, callback_data="check_join", style="success")],
-        ]),
+        reply_markup=link_keyboard(extra_rows=extra),
     )
 
 
@@ -1765,7 +1786,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = JOIN_PROMPT
             if missing:
                 text += "\n\n" + ", ".join(b["name"] for b in missing)
-        await context.bot.send_message(
+        _m = await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=text,
             reply_markup=link_keyboard(
@@ -1773,6 +1794,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   style="success")]],
                 joined=joined_ids),
         )
+        if getattr(_m, "message_id", None):
+            _gate_msg[user.id] = (update.effective_chat.id, _m.message_id)
+            _prune(_gate_msg, 5000)
         if need == 0:
             await _warn_admin_unverifiable(
                 context, [blk for blk in LINK_BLOCKS
@@ -1791,28 +1815,48 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = db_post_get(code) if code else None
     if p:
         await _post_welcome(update, context, p, chat_id=update.effective_chat.id)
-        try:
-            await q.message.delete()          # gate message hata do
-        except Exception as e:
-            log.warning("Gate delete fail: %s", e)
     else:
-        # Ye /start ka welcome tha (uspar bhi Verify button hai) — message
-        # DELETE mat karo, warna welcome + 5 links gayab ho jayenge.
-        # Keyboard bhi update karo taaki sab par ✓ dikhe.
         try:
-            await q.edit_message_text(
-                "Verified. Now just type your question.",
-                reply_markup=link_keyboard(
-                    extra_rows=[[_btn(GATE_BUTTON_TEXT, callback_data="check_join",
-                                      style="success")]],
-                    joined=[c["id"] for c in joined]))
+            await context.bot.send_message(
+                update.effective_chat.id,
+                "Verified. Now just type your question.")
         except Exception:
             pass
+    # Verify ho gaya -> purana "5 links + Verify" wala message HATA do.
+    # (Telegram delete par khud fade animation dikhata hai.)
+    for cid, mid in filter(None, [_gate_msg.pop(user.id, None)]):
+        try:
+            await context.bot.delete_message(chat_id=cid, message_id=mid)
+        except Exception as e:
+            log.warning("Gate message delete fail: %s", e)
+    try:
+        await q.message.delete()
+    except Exception as e:
+        log.warning("Gate delete fail: %s", e)
 
 
 # =====================================================================
 #  WELCOME  (naye member par)
 # =====================================================================
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _welcome_image_path() -> str:
+    """welcome.png dhundo. CWD par bharosa mat karo — Render ka working
+    directory badal sakta hai, aur tab image chup-chaap na milti thi."""
+    cand = []
+    env = (os.getenv("WELCOME_IMAGE") or "").strip()
+    if env:
+        cand.append(env)
+    cand += ["welcome.png", "assets/welcome.png",
+             os.path.join(_HERE, "welcome.png"),
+             os.path.join(_HERE, "assets", "welcome.png")]
+    for p in cand:
+        if os.path.exists(p):
+            return p
+    return env or "welcome.png"
+
+
 async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Service message = bot ko HAMESHA milti hai (chahe privacy on ho). Isliye
     # jab bhi koi group me join kare, hum us group ki id seekh lete hain.
@@ -1840,12 +1884,13 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             caption = build_welcome(member, msg.chat.title)
         sent = False
+        path = _welcome_image_path()
         try:
-            with open(WELCOME_IMAGE, "rb") as photo:
+            with open(path, "rb") as photo:
                 await context.bot.send_photo(chat_id=msg.chat_id, photo=photo, caption=caption)
             sent = True
         except FileNotFoundError:
-            log.warning("Welcome image nahi mili: %s", WELCOME_IMAGE)
+            log.warning("Welcome image nahi mili (%s) — sirf text bhej raha hoon.", path)
         except Exception as e:
             log.warning("Welcome photo fail (%s): %s", msg.chat_id, e)
         if not sent:
@@ -2392,6 +2437,9 @@ async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 _post_flow: dict = {}      # user_id -> {"type","step","data","channels","image","await_*"}
 # Post deep link se aaye par abhi gate paar na kiya ho -> user_id: code
 _pending_post: dict = {}
+# user_id -> (chat_id, message_id): jo gate message (5 links + Verify) bheja tha,
+# taaki verify hone ke baad usko DELETE kar sakein.
+_gate_msg: dict = {}
 
 
 def db_post_save(code, data):
