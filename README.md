@@ -337,6 +337,23 @@ delete that variable to pick up the new default.
 
 ---
 
+## Reliability — how Telegram errors are handled
+
+Every outgoing call that matters goes through one wrapper, `_safe()`, so a single Telegram error can
+never kill a handler or leave a user with silence:
+
+| Error | What it means | What the bot does |
+| --- | --- | --- |
+| `RetryAfter` (429) | Flood control | Waits `retry_after` seconds (capped at 60) and retries once |
+| `Forbidden` (403) | User blocked the bot, account deleted, or the bot was kicked | Drops the send, logs it, moves on — retrying is pointless |
+| `ChatMigrated` | A group became a supergroup, so the chat ID changed | Rewrites the stored chat ID for that block automatically |
+| `TimedOut` | Network was slow | One retry |
+| `BadRequest` | Malformed request | Logs the reason, no retry |
+| `Conflict` (409) | Two bot instances polling at once | Logged as an error — a deploy usually leaves one behind |
+
+`/broadcast` distinguishes the three outcomes — **sent**, **blocked the bot**, and **failed** — and
+keeps a jittered delay between sends so it stays under Telegram's ~1 msg/sec per chat limit.
+
 ## Performance
 
 The JSON store is read through an in-memory cache, so the whole file is parsed **once** per process

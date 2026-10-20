@@ -27,6 +27,7 @@
 import asyncio
 import difflib
 import json
+import hmac
 import logging
 import os
 import random
@@ -42,6 +43,20 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ChatMember,
+)
+# Telegram ke asli error types — inhe pakadna ZAROORI hai:
+#   RetryAfter -> 429 flood control (wait karke retry)
+#   Forbidden  -> 403 (user ne bot block kiya / bot ko chat se nikal diya)
+#   Migrated   -> group -> supergroup ho gaya (chat id badal gayi)
+#   TimedOut   -> network slow
+from telegram.error import (
+    RetryAfter,
+    Forbidden,
+    TimedOut,
+    ChatMigrated,          # PTB 22.x ka naam (purane me Migrated tha)
+    Conflict,
+    BadRequest,
+    TelegramError,
 )
 from telegram.constants import ChatType
 from telegram.ext import (
@@ -196,6 +211,27 @@ def _learned_ids():
         with _db_lock:
             _chat_ids_cache = dict(_db_load().get("chat_ids", {}))
     return _chat_ids_cache
+
+
+def db_replace_chat_id(old_id, new_id):
+    """Group -> supergroup migration: purani chat id ko nayi se badal do."""
+    global _chat_ids_cache
+    old_id, new_id = int(old_id), int(new_id)
+    with _db_lock:
+        data = _db_load()
+        changed = False
+        for name, cid in list(data.get("chat_ids", {}).items()):
+            if int(cid) == old_id:
+                data["chat_ids"][name] = new_id
+                changed = True
+        chats = data.setdefault("chats", {})
+        if str(old_id) in chats:
+            chats[str(new_id)] = chats.pop(str(old_id))
+            chats[str(new_id)]["id"] = new_id
+            changed = True
+        if changed:
+            _db_save(data)
+            _chat_ids_cache = dict(data["chat_ids"])
 
 
 def db_set_chat_id(name, chat_id):
@@ -910,10 +946,10 @@ async def send_join_gate(update, context, edit=False, joined=None):
     ], joined=joined)
     sent = None
     if edit and update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=kb)
+        sent = await _safe(update.callback_query.edit_message_text, text, reply_markup=kb)
         sent = update.callback_query.message
     else:
-        sent = await update.effective_message.reply_text(text, reply_markup=kb)
+        sent = await _safe(update.effective_message.reply_text, text, reply_markup=kb)
     uid = update.effective_user.id
     if sent is not None and getattr(sent, "message_id", None):
         _gate_msg[uid] = (getattr(sent, "chat_id", update.effective_chat.id),
@@ -1270,17 +1306,33 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     users = db_all_users()
-    sent = failed = 0
+    sent = blocked = failed = 0
     for u in users:
         if db_is_banned(u["id"]):
             continue
         try:
             await context.bot.send_message(u["id"], text)
             sent += 1
+        except RetryAfter as e:
+            # 429 flood — batai hui der ruk kar EK retry
+            await asyncio.sleep(min(int(getattr(e, "retry_after", 3) or 3) + 1, 60))
+            try:
+                await context.bot.send_message(u["id"], text)
+                sent += 1
+            except Exception:
+                failed += 1
+        except Forbidden:
+            blocked += 1          # user ne bot block kar diya / account deleted
         except Exception:
             failed += 1
-        await asyncio.sleep(random.uniform(0.05, 0.15))  # flood se bachne ke liye jitter
-    await msg.reply_text(f"Broadcast done. Sent: {sent}, Failed: {failed}")
+        # Telegram: ~1 msg/sec per chat, bulk me ~30/sec. 0.05-0.15s jitter
+        # safe hai, par 1000+ users par RetryAfter aane par upar wait ho jata hai.
+        await asyncio.sleep(random.uniform(0.05, 0.15))
+    await msg.reply_text(
+        f"Broadcast done.\n"
+        f"Sent: {sent}\n"
+        f"Blocked the bot: {blocked}\n"
+        f"Failed: {failed}")
 
 
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1397,6 +1449,49 @@ _RIGHTS = (
 )
 
 
+async def _safe(fn, *a, _retries=1, **k):
+    """Koi bhi Telegram API call isi se chalao. Crash nahi hota:
+      • 429 (RetryAfter) -> batai hui der ruk kar dobara try
+      • 403 (Forbidden)  -> chhod do (bot block/kick ho gaya) — dobara try bekaar
+      • Migrated         -> group supergroup ban gaya, log karo
+      • TimedOut         -> ek retry
+      • baaki Telegram error -> log karo, None return
+    Return: response ya None."""
+    for attempt in range(_retries + 1):
+        try:
+            return await fn(*a, **k)
+        except RetryAfter as e:
+            wait = min(int(getattr(e, "retry_after", 3) or 3) + 1, 60)
+            log.warning("Flood control (429) — %ss ruk raha hoon", wait)
+            await asyncio.sleep(wait)
+        except Forbidden as e:
+            log.info("Forbidden — bot block/kick ho gaya: %s", e)
+            return None
+        except ChatMigrated as e:
+            # Group supergroup ban gaya — purani chat id dead ho gayi.
+            log.warning("Chat migrate ho gayi -> %s", getattr(e, "new_chat_id", "?"))
+            try:
+                db_replace_chat_id(getattr(e, "old_chat_id", None) or 0, e.new_chat_id)
+            except Exception:
+                pass
+            return None
+        except Conflict as e:
+            log.error("409 Conflict — do bot instances chal rahe hain? %s", e)
+            return None
+        except TimedOut:
+            if attempt >= _retries:
+                log.warning("Telegram request timeout")
+                return None
+            await asyncio.sleep(1)
+        except BadRequest as e:
+            log.warning("BadRequest: %s", e)
+            return None
+        except TelegramError as e:
+            log.warning("Telegram error: %s", e)
+            return None
+    return None
+
+
 def _err_hint(e) -> str:
     """Telegram error ko simple bhasha me."""
     s = str(e).lower()
@@ -1419,22 +1514,23 @@ _SEP = "━━━━━━━━━━━━━━━━━"
 
 
 async def _send_long(message, text, limit=3800):
-    """Telegram ki 4096 limit — lamba text tukdon me bhejo, warna error aata hai."""
+    """Telegram ki 4096 limit — lamba text tukdon me bhejo, warna error aata hai.
+    Har chunk _safe se jaata hai (429/403 par crash nahi)."""
     if len(text) <= limit:
-        await message.reply_text(text)
+        await _safe(message.reply_text, text)
         return
     part = ""
     for line in text.split("\n"):
         while len(line) > limit:          # ek hi line bahut lambi -> tod do
-            await message.reply_text(line[:limit])
+            await _safe(message.reply_text, line[:limit])
             line = line[limit:]
         if part and len(part) + len(line) + 1 > limit:
-            await message.reply_text(part)
+            await _safe(message.reply_text, part)
             part = line
         else:
             part = f"{part}\n{line}" if part else line
     if part:
-        await message.reply_text(part)
+        await _safe(message.reply_text, part)
 
 
 async def _known_chats_lines(context, me) -> list:
@@ -1937,8 +2033,25 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]])
     try:
         await context.bot.send_message(target, "\n".join(lines), reply_markup=kb)
+    except Forbidden:
+        log.warning("Join-request DM nahi gayi — Admin 1 ne bot block kiya hai? (id %s)", target)
     except Exception as e:
-        log.warning("Owner DM fail: %s", e)
+        log.warning("Join-request DM fail (%s): %s", target, e)
+
+
+async def on_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Group supergroup ban gaya -> chat id badal gayi. Purani id ki jagah
+    nayi yaad rakho, warna gate purani (dead) id par check karta rehta."""
+    msg = update.effective_message
+    new_id = getattr(msg, "migrate_to_chat_id", None)
+    if not new_id:
+        return
+    old_id = getattr(msg, "migrate_from_chat_id", None) or getattr(msg, "chat_id", None)
+    log.info("Chat migrated: %s -> %s", old_id, new_id)
+    try:
+        db_replace_chat_id(old_id, new_id)
+    except Exception as e:
+        log.warning("Migrate update fail: %s", e)
 
 
 async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2067,12 +2180,11 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"{fonts.small_caps('Slow down')} — {fonts.small_caps('too many messages, try again in a little while')}."
         )
         return
-    await context.bot.send_chat_action(update.effective_chat.id, "typing")
-    await update.effective_message.reply_text(
-        await ask_ai(update.effective_message.text, where="a private chat",
-                     mem_key=f"u{user.id}",
-                     note=_owner_note(user.id))
-    )
+    await _safe(context.bot.send_chat_action, update.effective_chat.id, "typing")
+    await _safe(update.effective_message.reply_text,
+                await ask_ai(update.effective_message.text, where="a private chat",
+                             mem_key=f"u{user.id}",
+                             note=_owner_note(user.id)))
 
 
 async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2099,8 +2211,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = _strip_mention(msg.text, me.username) or "The user mentioned you. Greet them warmly."
     title = _clean_title(msg.chat.title)
     where = f'the Telegram group "{title}"' if title else "a Telegram group"
-    await context.bot.send_chat_action(update.effective_chat.id, "typing")
-    await msg.reply_text(await ask_ai(
+    await _safe(context.bot.send_chat_action, update.effective_chat.id, "typing")
+    await _safe(msg.reply_text, await ask_ai(
         prompt, where=where,
         mem_key=f"g{msg.chat.id}:u{update.effective_user.id}",
         note=_owner_note(update.effective_user.id),
@@ -2808,10 +2920,10 @@ async def on_private_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     fl["image"] = photos[-1].file_id
     fl.pop("await_image", None)
-    await msg.reply_text(f"{fonts.small_caps('image received — reading it with AI')} …")
+    await _safe(msg.reply_text, f"{fonts.small_caps('image received — reading it with AI')} …")
     read = await _vision_read(context, fl["image"], VISION_PROMPT)
     if read:
-        await msg.reply_text(
+        await _safe(msg.reply_text,
             f"{fonts.bold('AI read from the image')} — "
             f"{fonts.small_caps('hint only, nothing is filled in')}:\n{read}")
     await _post_ask(update.effective_chat.id, context, user.id)
@@ -2943,9 +3055,11 @@ async def _post_welcome(update, context, p, chat_id=None):
     txt = (f"{fonts.bold(name)}\n\n"
            f"{fonts.small_caps('tap below to open the channel')}")
     if chat_id:
-        sent = await context.bot.send_message(chat_id, txt, reply_markup=kb)
+        sent = await _safe(context.bot.send_message, chat_id, txt, reply_markup=kb)
     else:
-        sent = await update.effective_message.reply_text(txt, reply_markup=kb)
+        sent = await _safe(update.effective_message.reply_text, txt, reply_markup=kb)
+    if sent is None:
+        return
     try:
         asyncio.create_task(_welcome_upgrade(context, sent, name, p, kb))
     except Exception:
@@ -3046,6 +3160,8 @@ def build_application() -> Application:
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, on_chat_seen))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_member))
+    # Group -> supergroup migration (chat id badal jaati hai)
+    app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, on_migrate))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, on_group_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, on_private_message))
     app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, on_private_photo))
@@ -3056,6 +3172,7 @@ def build_application() -> Application:
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, _learn_only), group=1)
 
     app.add_error_handler(on_error)
+    app.post_shutdown = _on_shutdown
     return app
 
 
@@ -3095,7 +3212,10 @@ def run_webhook(app: Application):
     @api.post(webhook_path)
     async def telegram_webhook(request: Request):
         # Telegram har request me ye header bhejta hai — match na ho to reject.
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != secret:
+        # hmac.compare_digest = timing-safe (simple == timing attack ke liye
+        # thoda exposed hota hai; secret random hai par phir bhi theek karte hain).
+        got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not hmac.compare_digest(got, secret):
             return Response(status_code=403)
         update = Update.de_json(await request.json(), app.bot)
         await app.process_update(update)
@@ -3108,6 +3228,13 @@ def run_webhook(app: Application):
 
     # access_log=False -> webhook ka secret path logs me print nahi hota.
     uvicorn.run(api, host="0.0.0.0", port=PORT, log_level="info", access_log=False)
+
+
+async def _on_shutdown(app: Application):
+    """Bot band ho raha hai. DB memory me hai par HAR write turant disk par
+    jaati hai (os.replace + fsync), isliye yahan kuch bachana nahi hai —
+    sirf saaf log, taaki Render logs me dikhe."""
+    log.info("Shutting down — sab data already disk par save hai.")
 
 
 async def _polling_post_init(app: Application):
